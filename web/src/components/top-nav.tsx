@@ -40,7 +40,7 @@ function buildThirdPartyHref(appUrl: string, baseUrl: string, apiKey: string) {
 }
 
 export function TopNav() {
-  const pathname = usePathname();
+  const pathname = usePathname().replace(/\/+$/, "") || "/";
   const router = useRouter();
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(undefined);
   const [thirdPartyApps, setThirdPartyApps] = useState<ThirdPartyAppsSettings | null>(null);
@@ -132,8 +132,8 @@ export function TopNav() {
 
   return (
     <>
-      <header className="border-b border-stone-100/50 dark:border-white/10">
-        <div className="flex min-h-12 flex-col gap-1 px-3 py-2 sm:h-12 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-6 sm:py-0">
+      <header className="app-navigation">
+        <div className="flex min-h-14 flex-col gap-2 px-3 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:px-4 xl:flex-nowrap">
           <div className="flex items-center justify-between gap-2 sm:justify-start sm:gap-3">
             <Sheet>
               <SheetTrigger className="inline-flex size-8 items-center justify-center text-stone-700 transition hover:text-stone-950 sm:hidden dark:text-stone-200 dark:hover:text-white">
@@ -189,7 +189,7 @@ export function TopNav() {
             </Link>
             <HeaderActions className="ml-auto sm:hidden" showGithubText={false} />
           </div>
-          <nav className="hide-scrollbar -mx-1 hidden min-w-0 flex-1 gap-1 overflow-x-auto px-1 sm:mx-0 sm:flex sm:justify-center sm:gap-8 sm:overflow-visible sm:px-0">
+          <nav aria-label="主导航" className="hide-scrollbar hidden min-w-0 gap-1 overflow-x-auto sm:order-3 sm:flex sm:w-full xl:order-none xl:w-auto xl:flex-1 xl:justify-center">
             {canvasHref ? (
               <button
                 type="button"
@@ -206,14 +206,12 @@ export function TopNav() {
                   key={item.href}
                   href={item.href}
                   className={cn(
-                    "relative shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[13px] font-medium transition sm:rounded-none sm:px-0 sm:text-[15px]",
-                    active
-                      ? "bg-stone-950 text-white sm:bg-transparent sm:font-semibold sm:text-stone-950 dark:bg-white dark:text-stone-950 dark:sm:bg-transparent dark:sm:text-white"
-                      : "text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100",
+                    "app-nav-link shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                    active ? "is-active" : "",
                   )}
+                  aria-current={active ? "page" : undefined}
                 >
                   {item.label}
-                  {active ? <span className="absolute inset-x-0 -bottom-[1px] hidden h-0.5 bg-stone-950 dark:bg-white sm:block" /> : null}
                 </Link>
               );
             })}

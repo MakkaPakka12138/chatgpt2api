@@ -229,3 +229,50 @@
     animation: none;
     mix-blend-mode: normal;
 }
+
+/* Quiet surfaces and a single accent keep dense account information readable. */
+.app-shell {
+  --surface: #ffffff;
+  --surface-soft: #f7f8fa;
+  --surface-border: #e6e8ec;
+  --accent-soft: #eaf4f1;
+  --accent-ink: #24745e;
+  background: radial-gradient(ellipse at top left, #eef5f2, transparent 55%), #f5f6f8;
+}
+
+.dark .app-shell {
+  --surface: #1d1d20;
+  --surface-soft: #242427;
+  --surface-border: #333338;
+  --accent-soft: #233a33;
+  --accent-ink: #8bd4ba;
+  background: radial-gradient(ellipse at top left, #222d29, transparent 50%), #151517;
+}
+
+.app-navigation,
+.pool-surface,
+.pool-metric {
+  background: var(--surface);
+  border: 1px solid var(--surface-border);
+  box-shadow: 0 2px 8px rgb(20 30 40 / 0.025);
+}
+
+.app-navigation { border-radius: 16px; }
+.app-nav-link { color: #686c75; }
+.app-nav-link:hover { background: var(--surface-soft); color: #303641; }
+.app-nav-link.is-active { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.dark .app-nav-link { color: #b0b0b8; }
+.dark .app-nav-link:hover { color: #f5f5f7; }
+.dark .app-nav-link.is-active { color: var(--accent-ink); }
+.pool-heading { padding: 4px 0; }
+.pool-metric { position: relative; overflow: hidden; }
+.pool-metric-icon { background: color-mix(in srgb, currentColor 9%, transparent); }
+.pool-metric[data-metric="quota"] { border-color: color-mix(in srgb, #3b82f6 30%, var(--surface-border)); }
+.pool-model { background: var(--surface-soft); border-color: var(--surface-border); }
+.pool-model:hover { background: var(--accent-soft); border-color: var(--accent-ink); }
+.dark .pool-model img { filter: invert(1); opacity: 0.75; }
+.pool-table thead { background: var(--surface-soft); }
+.pool-table tbody tr:last-child { border-bottom: 0; }
+.pool-table tbody tr[data-selected="true"] { background: var(--accent-soft); }
+.pool-table td { font-variant-numeric: tabular-nums; }
+.pool-table > div > div.overflow-x-auto { scrollbar-width: thin; scrollbar-color: #a8adb5 transparent; }

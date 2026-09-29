@@ -709,7 +709,7 @@ function AccountsPageContent() {
 
   return (
     <>
-      <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <section className="pool-heading flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-1">
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">
             Account Pool
@@ -734,7 +734,7 @@ function AccountsPageContent() {
             disabled={isLoading || isRefreshing || isDeleting || accounts.length === 0}
           >
             <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
-            一键刷新所有账号信息和额度
+            刷新全部额度
           </Button>
           <AccountImportDialog
             disabled={isLoading || isRefreshing || isDeleting}
@@ -848,19 +848,21 @@ function AccountsPageContent() {
       </Dialog>
 
       <section className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
           {metricCards.map((item) => {
             const Icon = item.icon;
             const value = (refreshSummary ?? summary)[item.key];
             return (
-              <Card key={item.key} className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+              <Card key={item.key} className="pool-metric rounded-2xl" data-metric={item.key}>
                 <CardContent className="p-4">
-                  <div className="mb-4 flex items-start justify-between">
-                    <span className="text-xs font-medium text-stone-400">{item.label}</span>
-                    <Icon className="size-4 text-stone-400" />
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-stone-500">{item.label}</span>
+                    <span className={cn("pool-metric-icon flex size-8 shrink-0 items-center justify-center rounded-xl", item.color)}>
+                      <Icon className="size-4" />
+                    </span>
                   </div>
                   <div className={cn("text-[1.75rem] font-semibold tracking-tight", item.color)}>
-                    <span className={typeof value === "number" ? "" : "text-[1.1rem]"}>
+                    <span className="tabular-nums">
                       {typeof value === "number" ? formatCompact(value) : value}
                     </span>
                   </div>
@@ -869,7 +871,7 @@ function AccountsPageContent() {
             );
           })}
         </div>
-        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+        <Card className="pool-surface rounded-2xl">
           <CardContent className="p-4">
             <div className="mb-3 text-sm font-medium text-stone-700">
               系统可用模型
@@ -881,7 +883,7 @@ function AccountsPageContent() {
                   <button
                     key={model.id}
                     type="button"
-                    className="inline-flex cursor-pointer items-center rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-50"
+                    className="pool-model inline-flex cursor-pointer items-center rounded-lg border px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors"
                     onClick={() => {
                       void navigator.clipboard.writeText(model.id);
                       toast.success("模型名已复制");
@@ -916,8 +918,8 @@ function AccountsPageContent() {
             </Badge>
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-            <div className="relative min-w-[260px]">
+          <div className="grid grid-cols-2 gap-2 lg:flex lg:items-center">
+            <div className="relative col-span-2 min-w-0 lg:w-[260px]">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" />
               <Input
                 value={query}
@@ -925,7 +927,8 @@ function AccountsPageContent() {
                   setQuery(event.target.value);
                   setPage(1);
                 }}
-                placeholder="搜索邮箱"
+                placeholder="搜索账号邮箱…"
+                aria-label="搜索账号邮箱"
                 className="h-10 rounded-xl border-stone-200 bg-white/85 pl-10"
               />
             </div>
@@ -984,7 +987,7 @@ function AccountsPageContent() {
 
         <Card
           className={cn(
-            "overflow-hidden rounded-2xl border-white/80 bg-white/90 shadow-sm",
+            "pool-surface pool-table overflow-hidden rounded-2xl",
             isLoading && accounts.length === 0 ? "hidden" : "",
           )}
         >
@@ -998,7 +1001,7 @@ function AccountsPageContent() {
                   disabled={selectedTokens.length === 0 || isRefreshing}
                 >
                   {isRefreshing ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                  刷新选中账号信息和额度
+                  刷新所选额度
                 </Button>
                 <Button
                   variant="ghost"
@@ -1038,7 +1041,7 @@ function AccountsPageContent() {
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1100px] whitespace-nowrap text-left">
-                <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
+                <thead className="border-b border-stone-100 text-[11px] font-medium text-stone-500 uppercase tracking-[0.08em]">
                   <tr>
                     <th className="w-12 px-4 py-3">
                       <Checkbox
@@ -1066,6 +1069,7 @@ function AccountsPageContent() {
                     return (
                       <tr
                         key={account.access_token}
+                        data-selected={selectedIds.includes(account.access_token)}
                         className="border-b border-stone-100/80 text-sm text-stone-600 transition-colors hover:bg-stone-50/70"
                       >
                         <td className="px-4 py-3">
