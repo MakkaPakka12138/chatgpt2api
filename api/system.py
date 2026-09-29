@@ -24,6 +24,7 @@ from services.image_service import (
 from services.image_storage_service import ImageStorageError, image_storage_service
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
+from services.pool_status_service import pool_status_cache
 from services.proxy_service import proxy_settings, test_clearance, test_proxy
 
 
@@ -75,6 +76,11 @@ def create_router(app_version: str) -> APIRouter:
     @router.get("/version")
     async def get_version():
         return {"version": app_version}
+
+    @router.get("/api/pool/status")
+    async def get_pool_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return pool_status_cache.get()
 
     @router.get("/api/settings")
     async def get_settings(authorization: str | None = Header(default=None)):

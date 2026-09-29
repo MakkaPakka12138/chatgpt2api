@@ -1876,6 +1876,17 @@ class AccountService:
             items.append(item)
         return items
 
+    def pool_summary_snapshot(self) -> dict:
+        """Take an atomic management snapshot without account identifiers or credentials."""
+        fields = ("type", "source_type", "status", "quota", "upload_remaining", "upload_reset_at",
+                  "upload_blocked_until", "restore_at", "success", "fail")
+        with self._lock:
+            items = [{**{key: item.get(key) for key in fields},
+                      "image_inflight": int(self._image_inflight.get(token, 0))}
+                     for token, item in self._accounts.items()]
+            return {"items": items, "quarantined": len(self._quarantined_accounts),
+                    "cumulative_total": self._cumulative_total}
+
     def get_stats(self) -> dict:
         with self._lock:
             items = list(self._accounts.values())
