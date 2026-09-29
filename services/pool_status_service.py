@@ -14,7 +14,7 @@ from utils.log import logger
 
 
 class PoolStatusCache:
-    def __init__(self, accounts=account_service, settings=config, interval: float = 30):
+    def __init__(self, accounts=account_service, settings=config, interval: float = 300):
         self.accounts = accounts
         self.settings = settings
         self.interval = interval
