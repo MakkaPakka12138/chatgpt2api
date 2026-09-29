@@ -1142,9 +1142,9 @@ function AccountsPageContent() {
                             const remaining = expired ? null : account.upload_remaining;
                             const restoreAt = blocked ? account.upload_blocked_until : account.upload_reset_at;
                             return (
-                              <div className="space-y-0.5" title={[account.upload_last_error || "上游未提供剩余次数时显示未知；有缓存的参考图可复用", restoreAt ? formatRestoreAt(restoreAt).absolute : ""].filter(Boolean).join("\n")}>
-                                <div className={blocked || remaining === 0 ? "font-medium text-amber-600" : "font-medium text-stone-700"}>
-                                  {blocked ? "受限" : remaining == null ? "未知" : `${remaining} 次`}
+                              <div className="space-y-0.5" title={[account.upload_last_error || "新上传余量低于20次时切号；有缓存的参考图可复用；上游未提供余量时显示未知", restoreAt ? formatRestoreAt(restoreAt).absolute : ""].filter(Boolean).join("\n")}>
+                                <div className={blocked || (remaining != null && remaining < 20) ? "font-medium text-amber-600" : "font-medium text-stone-700"}>
+                                  {blocked ? "受限" : remaining == null ? "未知" : `${remaining} 次${remaining < 20 ? " · 低" : ""}`}
                                 </div>
                                 {restoreAt && new Date(restoreAt).getTime() > Date.now() ? (
                                   <div>{formatRestoreAt(restoreAt).relative}</div>

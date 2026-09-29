@@ -242,7 +242,8 @@ class AccountService:
         if blocked_until is not None and blocked_until > time.time():
             return False
         remaining = upload_remaining(account)
-        return remaining is None or remaining >= needed
+        # Switch before new uploads drain an account; cached references spend no uploads.
+        return remaining is None or remaining >= max(20, needed)
 
     def reserve_upload(self, access_token: str) -> bool:
         """Reserve one known upload atomically so parallel tasks cannot overspend it."""
