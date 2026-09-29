@@ -23,6 +23,7 @@ from PIL import Image
 from services.account_service import account_service
 from services.config import config
 from services.proxy_service import proxy_settings
+from services.reference_uploads import extract_upload_limits, reference_upload_cache, upload_limit_error
 from utils.helper import UpstreamHTTPError, ensure_ok, iter_sse_payloads, new_uuid, split_image_model
 from utils.log import logger
 from utils.pow import build_legacy_requirements_token, build_proof_token, parse_pow_resources
@@ -362,6 +363,7 @@ class OpenAIBackendAPI:
             "default_model_slug": init_payload.get("default_model_slug"),
             "restore_at": restore_at,
             "status": "限流" if quota == 0 else "正常",
+            **extract_upload_limits(limits_progress),
         }
         logger.debug({
             "event": "backend_user_info_result",
@@ -895,7 +897,8 @@ class OpenAIBackendAPI:
         ensure_ok(response, path)
         return response.json().get("conduit_token", "")
 
-    def _decode_image_base64(self, image: str) -> bytes:
+    @staticmethod
+    def _decode_image_base64(image: str) -> bytes:
         """把 base64 图片字符串或本地路径解码成二进制。"""
         if (
                 image
@@ -913,16 +916,28 @@ class OpenAIBackendAPI:
     def _upload_image(self, image: str, file_name: str = "image.png") -> Dict[str, Any]:
         """上传一张 base64 图片，返回底层文件元数据。"""
         data = self._decode_image_base64(image)
-        if (
-                image
-                and len(image) < 512
-                and not image.startswith("data:")
-                and "\n" not in image
-                and "\r" not in image
-        ):
-            candidate_path = Path(os.path.expanduser(image))
-            if candidate_path.exists() and candidate_path.is_file():
-                file_name = candidate_path.name
+        def upload() -> Dict[str, Any]:
+            reserved = account_service.reserve_upload(self.access_token)
+            created = False
+            def on_created() -> None:
+                nonlocal created
+                created = True
+            try:
+                result = self._upload_image_data(data, file_name, on_created)
+            except UpstreamHTTPError as exc:
+                limit = upload_limit_error(exc)
+                if limit is not None:
+                    account_service.mark_upload_limited(self.access_token, str(limit), limit.retry_after)
+                    raise limit from exc
+                raise
+            finally:
+                account_service.finish_upload(self.access_token, reserved, created)
+            return result
+        # A file ID belongs to its upstream account and cannot be shared across tokens.
+        return reference_upload_cache.get_or_upload(self.access_token, data, upload)
+
+    def _upload_image_data(self, data: bytes, file_name: str, on_created: Callable[[], None]) -> Dict[str, Any]:
+        """Create, transfer, and confirm a new upstream file (cache misses only)."""
         image = Image.open(BytesIO(data))
         width, height = image.size
         mime_type = Image.MIME.get(image.format, "image/png")
@@ -935,6 +950,7 @@ class OpenAIBackendAPI:
             timeout=60,
         )
         ensure_ok(response, path)
+        on_created()
         upload_meta = response.json()
         response = self.session.put(
             upload_meta["upload_url"],

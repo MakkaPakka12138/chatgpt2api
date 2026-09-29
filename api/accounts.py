@@ -238,6 +238,30 @@ def create_router() -> APIRouter:
             "items": refresh_result.get("items", result.get("items", [])),
         }
 
+    @router.get("/api/accounts/abnormal")
+    async def get_abnormal_accounts(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"items": account_service.list_abnormal_accounts()}
+
+    @router.post("/api/accounts/abnormal/recover")
+    async def recover_abnormal_accounts(body: AccountDeleteRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        tokens = _unique_tokens(body.tokens)
+        if not tokens or len(tokens) > 20:
+            raise HTTPException(status_code=400, detail={"error": "请指定 1 至 20 个异常账号"})
+        try:
+            return await run_in_threadpool(account_service.recover_abnormal_accounts, tokens)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+
+    @router.delete("/api/accounts/abnormal")
+    async def delete_abnormal_accounts(body: AccountDeleteRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        tokens = _unique_tokens(body.tokens)
+        if not tokens:
+            raise HTTPException(status_code=400, detail={"error": "tokens is required"})
+        return account_service.delete_abnormal_accounts(tokens)
+
     @router.delete("/api/accounts")
     async def delete_accounts(body: AccountDeleteRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)

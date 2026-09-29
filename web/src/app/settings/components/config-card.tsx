@@ -213,9 +213,9 @@ export function ConfigCard() {
                 checked={Boolean(config?.auto_remove_invalid_accounts)}
                 onCheckedChange={(checked) => setAutoRemoveInvalidAccounts(Boolean(checked))}
               />
-              自动移除异常账号
+              自动隔离异常账号
             </label>
-            <p className="text-xs text-stone-500">刷新时检测并移除</p>
+            <p className="text-xs text-stone-500">检测异常后移出调度池，资料保留在“异常账号”页面，可验证恢复或手动删除。</p>
           </div>
           <div className="space-y-2">
             <div className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
@@ -286,7 +286,7 @@ export function ConfigCard() {
               checked={Boolean(config?.auto_remove_rate_limited_accounts)}
               onCheckedChange={(checked) => setAutoRemoveRateLimitedAccounts(Boolean(checked))}
             />
-            自动移除限流账号
+            自动隔离限流账号（保留在异常账号页面）
           </label>
           <div className="space-y-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
             <div>

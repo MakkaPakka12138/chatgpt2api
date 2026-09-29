@@ -18,6 +18,7 @@ from services.log_service import (
     log_service,
 )
 from services.storage.base import StorageBackend
+from services.reference_uploads import UploadLimitError, reference_upload_cache, timestamp, upload_remaining
 from utils.helper import anonymize_token
 
 
@@ -52,8 +53,11 @@ class AccountService:
         self._token_refresh_lock = Lock()
         self._image_slot_condition = Condition(self._lock)
         self._index = 0
+        self._quarantined_accounts: dict[str, dict] = {}
+        self._abnormal_recovery_lock = Lock()
         self._accounts = self._load_accounts()
         self._image_inflight: dict[str, int] = {}
+        self._upload_reservations: dict[str, int] = {}
         self._token_aliases: dict[str, str] = {}
         self._cumulative_total = self._load_cumulative_total()
 
@@ -119,14 +123,105 @@ class AccountService:
 
     def _load_accounts(self) -> dict[str, dict]:
         accounts = self.storage.load_accounts()
-        return {
-            normalized["access_token"]: normalized
-            for item in accounts
-            if (normalized := self._normalize_account(item)) is not None
-        }
+        active = {}
+        for item in accounts:
+            normalized = self._normalize_account(item)
+            if normalized is not None:
+                target = self._quarantined_accounts if normalized.get("quarantined_at") else active
+                target[normalized["access_token"]] = normalized
+        return active
 
     def _save_accounts(self) -> None:
-        self.storage.save_accounts(list(self._accounts.values()))
+        self.storage.save_accounts([*self._accounts.values(), *self._quarantined_accounts.values()])
+
+    def _quarantine_account_locked(self, account: dict, event: str, error: str = "") -> None:
+        token = account["access_token"]
+        self._quarantined_accounts[token] = {
+            **account,
+            "quarantined_at": datetime.now(timezone.utc).isoformat(),
+            "quarantine_event": event,
+            "quarantine_reason": error or account.get("last_refresh_error") or event,
+        }
+        self._accounts.pop(token, None)
+        self._save_accounts()
+
+    def list_abnormal_accounts(self) -> list[dict]:
+        with self._lock:
+            items = [*self._quarantined_accounts.values(),
+                     *(item for item in self._accounts.values() if item.get("status") == "异常")]
+            # The page does not need refresh tokens, passwords, or identity tokens.
+            fields = ("access_token", "email", "type", "source_type", "status", "quota", "created_at",
+                      "quarantined_at", "quarantine_event", "quarantine_reason", "last_refresh_error",
+                      "last_refresh_error_at", "last_invalid_at", "invalid_count")
+            return sorted(({key: item.get(key) for key in fields} for item in items),
+                          key=lambda item: str(item.get("quarantined_at") or item.get("last_invalid_at") or ""), reverse=True)
+
+    def delete_abnormal_accounts(self, tokens: list[str]) -> dict:
+        removed = 0
+        deleted_tokens: set[str] = set()
+        with self._lock:
+            for raw_token in set(tokens):
+                token = self._resolve_access_token_locked(raw_token)
+                if self._quarantined_accounts.pop(token, None) is not None:
+                    removed += 1
+                    deleted_tokens.add(token)
+                elif (self._accounts.get(token) or {}).get("status") == "异常":
+                    self._accounts.pop(token, None)
+                    removed += 1
+                    deleted_tokens.add(token)
+            if removed:
+                for token in deleted_tokens:
+                    self._image_inflight.pop(token, None)
+                    reference_upload_cache.invalidate(token)
+                self._token_aliases = {old: new for old, new in self._token_aliases.items()
+                                       if old not in deleted_tokens and new not in deleted_tokens}
+                self._save_accounts()
+                log_service.add(LOG_TYPE_ACCOUNT, "删除异常账号记录", {"removed": removed})
+        return {"removed": removed, "items": self.list_abnormal_accounts()}
+
+    def recover_abnormal_accounts(self, tokens: list[str]) -> dict:
+        restored = 0
+        errors = []
+        if not self._abnormal_recovery_lock.acquire(blocking=False):
+            raise RuntimeError("已有异常账号正在验证，请稍后重试")
+        try:
+            for raw_token in dict.fromkeys(tokens):
+                with self._lock:
+                    token = self._resolve_access_token_locked(raw_token)
+                    account = self._quarantined_accounts.get(token) or self._accounts.get(token)
+                    if account is None or (not account.get("quarantined_at") and account.get("status") != "异常"):
+                        errors.append({"token": anonymize_token(token), "error": "账号不存在或已恢复"})
+                        continue
+                    # Keep it out of scheduling until upstream validation succeeds.
+                    self._accounts[token] = {**account, "status": "异常"}
+                    self._quarantined_accounts.pop(token, None)
+                    self._save_accounts()
+                try:
+                    result = self.fetch_remote_info(token, "recover_abnormal_account", defer_invalid_removal=False)
+                    if result is None or result.get("status") in {"异常", "禁用"}:
+                        raise RuntimeError("账号仍不可用，已保留在异常列表")
+                    token = self.resolve_access_token(token)
+                    with self._lock:
+                        current = self._accounts.get(token)
+                        if current is None:
+                            raise RuntimeError("账号仍处于自动隔离状态")
+                        for field in ("quarantined_at", "quarantine_event", "quarantine_reason"):
+                            current.pop(field, None)
+                        self._save_accounts()
+                    restored += 1
+                    log_service.add(LOG_TYPE_ACCOUNT, "验证恢复异常账号", {"token": anonymize_token(token)})
+                except Exception as exc:
+                    token = self.resolve_access_token(token)
+                    with self._lock:
+                        current = self._accounts.get(token)
+                        if current is not None:
+                            current = {**current, "status": "异常", "last_refresh_error": str(exc),
+                                       "last_refresh_error_at": datetime.now(timezone.utc).isoformat()}
+                            self._quarantine_account_locked(current, "recover_abnormal_account_failed", str(exc))
+                    errors.append({"token": anonymize_token(token), "error": str(exc)})
+        finally:
+            self._abnormal_recovery_lock.release()
+        return {"restored": restored, "errors": errors, "items": self.list_abnormal_accounts()}
 
     @staticmethod
     def _is_image_account_available(account: dict) -> bool:
@@ -135,6 +230,64 @@ class AccountService:
         if account.get("status") in {"禁用", "限流", "异常"}:
             return False
         return int(account.get("quota") or 0) > 0
+
+    @staticmethod
+    def _can_upload_references(account: dict, reference_digests: tuple[str, ...]) -> bool:
+        if not reference_digests:
+            return True
+        needed = reference_upload_cache.missing(str(account.get("access_token") or ""), reference_digests)
+        if needed == 0:
+            return True
+        blocked_until = timestamp(account.get("upload_blocked_until"))
+        if blocked_until is not None and blocked_until > time.time():
+            return False
+        remaining = upload_remaining(account)
+        return remaining is None or remaining >= needed
+
+    def reserve_upload(self, access_token: str) -> bool:
+        """Reserve one known upload atomically so parallel tasks cannot overspend it."""
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            account = self._accounts.get(access_token)
+            if account is None:
+                return False
+            blocked_until = timestamp(account.get("upload_blocked_until"))
+            reset = timestamp(account.get("upload_reset_at"))
+            remaining = upload_remaining(account)
+            if (blocked_until is not None and blocked_until > time.time()) or remaining == 0:
+                until = blocked_until if blocked_until and blocked_until > time.time() else reset
+                raise UploadLimitError("该账号文件上传额度已耗尽", max(1, int((until or time.time() + 3600) - time.time())))
+            if remaining is None:
+                return False
+            self._accounts[access_token] = {**account, "upload_remaining": remaining - 1}
+            self._upload_reservations[access_token] = self._upload_reservations.get(access_token, 0) + 1
+            self._save_accounts()
+            return True
+
+    def finish_upload(self, access_token: str, reserved: bool, consumed: bool) -> None:
+        if not reserved:
+            return
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            count = self._upload_reservations.get(access_token, 0)
+            if count <= 1:
+                self._upload_reservations.pop(access_token, None)
+            else:
+                self._upload_reservations[access_token] = count - 1
+            account = self._accounts.get(access_token)
+            blocked = timestamp((account or {}).get("upload_blocked_until"))
+            if not consumed and not (blocked and blocked > time.time()) and account is not None and account.get("upload_remaining") is not None:
+                account["upload_remaining"] += 1
+                self._save_accounts()
+
+    def mark_upload_limited(self, access_token: str, error: str, retry_after: int) -> None:
+        until = datetime.fromtimestamp(time.time() + max(1, retry_after), timezone.utc).isoformat()
+        self.update_account(access_token, {
+            "upload_remaining": 0,
+            "upload_reset_at": until,
+            "upload_blocked_until": until,
+            "upload_last_error": error[:500],
+        }, quiet=True)
 
     @classmethod
     def _account_matches_plan_type(cls, account: dict, plan_type: str | None = None) -> bool:
@@ -229,6 +382,14 @@ class AccountService:
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
         normalized["default_model_slug"] = normalized.get("default_model_slug") or None
         normalized["restore_at"] = normalized.get("restore_at") or None
+        try:
+            remaining = normalized.get("upload_remaining")
+            normalized["upload_remaining"] = max(0, int(remaining)) if remaining is not None else None
+        except (ValueError, TypeError):
+            normalized["upload_remaining"] = None
+        normalized["upload_reset_at"] = normalized.get("upload_reset_at") or None
+        normalized["upload_blocked_until"] = normalized.get("upload_blocked_until") or None
+        normalized["upload_last_error"] = normalized.get("upload_last_error") or None
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
         normalized["invalid_count"] = int(normalized.get("invalid_count") or 0)
@@ -423,6 +584,9 @@ class AccountService:
                 old_inflight = int(self._image_inflight.pop(old_token, 0))
                 if old_inflight:
                     self._image_inflight[new_token] = int(self._image_inflight.get(new_token, 0)) + old_inflight
+                old_uploads = self._upload_reservations.pop(old_token, 0)
+                if old_uploads:
+                    self._upload_reservations[new_token] = self._upload_reservations.get(new_token, 0) + old_uploads
             self._accounts[new_token] = account
             self._save_accounts()
             self._image_slot_condition.notify_all()
@@ -892,12 +1056,14 @@ class AccountService:
             plan_type: str | None = None,
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
+            reference_digests: tuple[str, ...] = (),
     ) -> list[str]:
         excluded = set(excluded_tokens or set())
         return [
             token
             for item in self._accounts.values()
             if self._is_image_account_available(item)
+               and self._can_upload_references(item, reference_digests)
                and self._account_matches_plan_type(item, plan_type)
                and self._account_matches_any_plan_type(item, plan_types)
                and self._account_matches_source_type(item, source_type)
@@ -911,11 +1077,12 @@ class AccountService:
             plan_type: str | None = None,
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
+            reference_digests: tuple[str, ...] = (),
     ) -> list[str]:
         max_concurrency = max(1, int(config.image_account_concurrency or 1))
         return [
             token
-            for token in self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types)
+            for token in self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests)
             if int(self._image_inflight.get(token, 0)) < max_concurrency
         ]
 
@@ -925,16 +1092,22 @@ class AccountService:
             plan_type: str | None = None,
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
+            reference_digests: tuple[str, ...] = (),
     ) -> str:
         with self._image_slot_condition:
             while True:
-                if not self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types):
+                if not self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests):
                     raise RuntimeError(
+                        "no account with available image and reference-upload quota" if reference_digests else
                         f"no available {plan_type or source_type or ''} image quota".replace("  ", " ").strip()
                         if plan_type or source_type else "no available image quota"
                     )
-                tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types)
+                tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests)
                 if tokens:
+                    if reference_digests:
+                        # Reuse a complete set of references before spending another account's uploads.
+                        cached = [token for token in tokens if reference_upload_cache.missing(token, reference_digests) == 0]
+                        tokens = cached or tokens
                     access_token = tokens[self._index % len(tokens)]
                     self._index += 1
                     self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
@@ -958,6 +1131,8 @@ class AccountService:
             plan_type: str | None = None,
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
+            reference_digests: tuple[str, ...] = (),
+            excluded_tokens: set[str] | None = None,
     ) -> str:
         """从候选池中获取一个可用的图片生图 token。
 
@@ -965,13 +1140,14 @@ class AccountService:
         限制最大尝试次数防止 token rotation 导致无限循环。
         """
         max_attempts = 20  # 防止无限循环
-        attempted_tokens: set[str] = set()
+        attempted_tokens: set[str] = {self.resolve_access_token(token) for token in (excluded_tokens or ())}
         for _attempt in range(max_attempts):
             access_token = self._acquire_next_candidate_token(
                 excluded_tokens=attempted_tokens,
                 plan_type=plan_type,
                 source_type=source_type,
                 plan_types=plan_types,
+                reference_digests=reference_digests,
             )
             attempted_tokens.add(access_token)
             try:
@@ -986,6 +1162,7 @@ class AccountService:
                 attempted_tokens.add(resolved)
             if (
                     self._is_image_account_available(account or {})
+                    and self._can_upload_references(account or {}, reference_digests)
                     and self._account_matches_plan_type(account or {}, plan_type)
                     and self._account_matches_any_plan_type(account or {}, plan_types)
                     and self._account_matches_source_type(account or {}, source_type)
@@ -1049,13 +1226,22 @@ class AccountService:
             self._accounts[access_token] = account
             self._save_accounts()
 
-    def remove_invalid_token(self, access_token: str, event: str, quiet: bool = False) -> bool:
+    def remove_invalid_token(self, access_token: str, event: str, quiet: bool = False, error: str = "") -> bool:
         if not config.auto_remove_invalid_accounts:
-            self.update_account(access_token, {"status": "异常", "quota": 0}, quiet=quiet)
+            updates = {"status": "异常", "quota": 0, "quarantine_event": event}
+            if error:
+                updates["last_refresh_error"] = error
+                updates["last_refresh_error_at"] = datetime.now(timezone.utc).isoformat()
+            self.update_account(access_token, updates, quiet=quiet)
             return False
-        removed = bool(self.delete_accounts([access_token])["removed"])
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            removed = current is not None
+            if current is not None:
+                self._quarantine_account_locked({**current, "status": "异常", "quota": 0}, event, error)
         if removed:
-            log_service.add(LOG_TYPE_ACCOUNT, "自动移除异常账号",
+            log_service.add(LOG_TYPE_ACCOUNT, "异常账号移入隔离列表",
                             {"source": event, "token": anonymize_token(access_token)})
         elif access_token:
             self.update_account(access_token, {"status": "异常", "quota": 0}, quiet=quiet)
@@ -1165,9 +1351,11 @@ class AccountService:
                 current = self._accounts.get(access_token)
                 if current is None:
                     added += 1
-                    self._cumulative_total += 1
-                    self._save_cumulative_total()
-                    current = {"created_at": self._now()}
+                    current = self._quarantined_accounts.get(access_token)
+                    if current is None:
+                        self._cumulative_total += 1
+                        self._save_cumulative_total()
+                        current = {"created_at": self._now()}
                 else:
                     skipped += 1
                 incoming = dict(payload)
@@ -1182,6 +1370,9 @@ class AccountService:
                     }
                 )
                 if account is not None:
+                    self._quarantined_accounts.pop(access_token, None)
+                    for field in ("quarantined_at", "quarantine_event", "quarantine_reason"):
+                        account.pop(field, None)
                     self._accounts[access_token] = account
             self._save_accounts()
             items = [dict(item) for item in self._accounts.values()]
@@ -1221,13 +1412,14 @@ class AccountService:
             current = self._accounts.get(access_token)
             if current is None:
                 return None
+            if updates.get("upload_remaining") is not None and "upload_blocked_until" not in updates:
+                updates = {**updates, "upload_remaining": max(0, int(updates["upload_remaining"]) - self._upload_reservations.get(access_token, 0))}
             account = self._normalize_account({**current, **updates, "access_token": access_token})
             if account is None:
                 return None
             if account.get("status") == "限流" and config.auto_remove_rate_limited_accounts:
-                self._accounts.pop(access_token, None)
-                self._save_accounts()
-                log_service.add(LOG_TYPE_ACCOUNT, "自动移除限流账号", {"token": anonymize_token(access_token)})
+                self._quarantine_account_locked(account, "auto_remove_rate_limited_accounts", "生图额度耗尽，自动移出调度池")
+                log_service.add(LOG_TYPE_ACCOUNT, "限流账号移入隔离列表", {"token": anonymize_token(access_token)})
                 return None
             self._accounts[access_token] = account
             self._save_accounts()
@@ -1323,9 +1515,8 @@ class AccountService:
             if account is None:
                 return None
             if account.get("status") == "限流" and config.auto_remove_rate_limited_accounts:
-                self._accounts.pop(access_token, None)
-                self._save_accounts()
-                log_service.add(LOG_TYPE_ACCOUNT, "自动移除限流账号", {"token": anonymize_token(access_token)})
+                self._quarantine_account_locked(account, "auto_remove_rate_limited_accounts", "生图额度耗尽，自动移出调度池")
+                log_service.add(LOG_TYPE_ACCOUNT, "限流账号移入隔离列表", {"token": anonymize_token(access_token)})
                 return None
             self._accounts[access_token] = account
             self._save_accounts()

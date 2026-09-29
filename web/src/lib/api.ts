@@ -22,6 +22,10 @@ export type Account = {
   source_type?: string | null;
   status: AccountStatus;
   quota: number;
+  upload_remaining?: number | null;
+  upload_reset_at?: string | null;
+  upload_blocked_until?: string | null;
+  upload_last_error?: string | null;
   email?: string | null;
   user_id?: string | null;
   limits_progress?: Array<{
@@ -371,6 +375,33 @@ export async function deleteAccounts(tokens: string[]) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "DELETE",
     body: { tokens },
+  });
+}
+
+export type AbnormalAccount = Pick<Account, "access_token" | "email" | "type" | "source_type" | "status" | "quota"> & {
+  created_at?: string | null;
+  quarantined_at?: string | null;
+  quarantine_event?: string | null;
+  quarantine_reason?: string | null;
+  last_refresh_error?: string | null;
+  last_refresh_error_at?: string | null;
+  last_invalid_at?: string | null;
+  invalid_count?: number;
+};
+
+export async function fetchAbnormalAccounts() {
+  return httpRequest<{ items: AbnormalAccount[] }>("/api/accounts/abnormal");
+}
+
+export async function recoverAbnormalAccount(token: string) {
+  return httpRequest<{ restored: number; errors: Array<{ token: string; error: string }>; items: AbnormalAccount[] }>("/api/accounts/abnormal/recover", {
+    method: "POST", body: { tokens: [token] },
+  });
+}
+
+export async function deleteAbnormalAccount(token: string) {
+  return httpRequest<{ removed: number; items: AbnormalAccount[] }>("/api/accounts/abnormal", {
+    method: "DELETE", body: { tokens: [token] },
   });
 }
 

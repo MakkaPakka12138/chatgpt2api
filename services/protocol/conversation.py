@@ -15,6 +15,7 @@ from services.account_service import account_service
 from services.config import config
 from services.image_storage_service import image_storage_service
 from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
+from services.reference_uploads import UploadLimitError, reference_upload_cache
 from utils.helper import (
     IMAGE_MODELS,
     extract_image_from_message_content,
@@ -744,7 +745,7 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                 if refreshed_token and refreshed_token != token and refreshed_token not in attempted_tokens:
                     token = refreshed_token
                 else:
-                    account_service.remove_invalid_token(token, "text_stream")
+                    account_service.remove_invalid_token(token, "text_stream", error=error_message)
                     token = account_service.get_text_access_token(
                         excluded_tokens=set(attempted_tokens),
                         model=request.model,
@@ -1310,6 +1311,13 @@ def _generate_single_image(
     tls_retry_count = 0
     conn_timeout_retry_count = 0
     poll_timeout_retry_count = 0
+    upload_retry_count = 0
+    upload_error: UploadLimitError | None = None
+    excluded_upload_tokens: set[str] = set()
+    reference_digests = tuple(
+        reference_upload_cache.digest(OpenAIBackendAPI._decode_image_base64(image))
+        for image in (request.images or [])
+    ) if not is_codex_image_model(request.model) else ()
     account_email = ""
 
     while True:
@@ -1322,8 +1330,14 @@ def _generate_single_image(
                 plan_type=plan_type,
                 source_type="codex" if codex_model else None,
                 plan_types=("plus", "team", "pro") if codex_model and not plan_type else None,
+                reference_digests=reference_digests,
+                excluded_tokens=excluded_upload_tokens,
             )
         except RuntimeError as exc:
+            if upload_error is not None:
+                raise ImageGenerationError(f"{upload_error}；没有其他满足额度条件的账号可重试", status_code=429,
+                                           error_type="rate_limit_error", code="file_upload_limit",
+                                           account_email=account_email) from exc
             raise ImageGenerationError(str(exc) or "image generation failed", account_email=account_email) from exc
 
         emitted_for_token = False
@@ -1388,6 +1402,18 @@ def _generate_single_image(
                 return outputs
             account_service.mark_image_result(token, True)
             return outputs
+        except UploadLimitError as exc:
+            upload_error = exc
+            account_service.mark_image_result(token, False)
+            account_service.mark_upload_limited(token, str(exc), exc.retry_after)
+            excluded_upload_tokens.add(token)
+            if not emitted_for_token and upload_retry_count < 1:
+                upload_retry_count += 1
+                logger.warning({"event": "reference_upload_limit_retry", "account_email": account_email,
+                                "retry_after": exc.retry_after, "index": index})
+                continue
+            raise ImageGenerationError(str(exc), status_code=429, error_type="rate_limit_error",
+                                       code="file_upload_limit", account_email=account_email) from exc
         except ImagePollTimeoutError as exc:
             account_service.mark_image_result(token, False)
             if account_email:
@@ -1476,6 +1502,14 @@ def _generate_single_image(
         except Exception as exc:
             account_service.mark_image_result(token, False)
             last_error = str(exc)
+            # Upstream may remove a cached reference before our conservative TTL expires.
+            error_body = json.dumps(getattr(exc, "body", ""), ensure_ascii=False).lower()
+            if reference_digests and any(code in error_body for code in ("file_not_found", "invalid_file_id", "file_expired")):
+                reference_upload_cache.invalidate(token)
+                if not emitted_for_token and upload_retry_count < 1:
+                    upload_retry_count += 1
+                    excluded_upload_tokens.add(token)
+                    continue
             logger.warning({
                 "event": "image_stream_fail",
                 "request_token": token,
@@ -1488,7 +1522,7 @@ def _generate_single_image(
                 if refreshed_token and refreshed_token != token:
                     token = refreshed_token
                     continue
-                account_service.remove_invalid_token(token, "image_stream")
+                account_service.remove_invalid_token(token, "image_stream", error=last_error)
                 continue
             # TLS/SSL 连接错误：自动重试
             if not emitted_for_token and is_tls_connection_error(last_error):

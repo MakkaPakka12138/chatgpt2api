@@ -1051,6 +1051,7 @@ function AccountsPageContent() {
                     <th className="w-56 px-4 py-3">账号信息</th>
                     <th className="w-32 px-4 py-3">创建时间</th>
                     <th className="w-24 px-4 py-3">额度</th>
+                    <th className="w-44 px-4 py-3">上传额度</th>
                     <th className="w-40 px-4 py-3">恢复时间</th>
                     <th className="w-18 px-4 py-3">在途</th>
                     <th className="w-18 px-4 py-3">成功</th>
@@ -1134,6 +1135,27 @@ function AccountsPageContent() {
                           <Badge variant="info" className="rounded-md">
                             {formatQuota(account)}
                           </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-xs leading-5 text-stone-500">
+                          {(() => {
+                            if (account.source_type === "codex") return "不适用";
+                            const blockedUntil = account.upload_blocked_until ? new Date(account.upload_blocked_until).getTime() : 0;
+                            const resetAt = account.upload_reset_at ? new Date(account.upload_reset_at).getTime() : 0;
+                            const blocked = blockedUntil > Date.now();
+                            const expired = resetAt > 0 && resetAt <= Date.now();
+                            const remaining = expired ? null : account.upload_remaining;
+                            const restoreAt = blocked ? account.upload_blocked_until : account.upload_reset_at;
+                            return (
+                              <div className="space-y-0.5" title={account.upload_last_error || "上游未提供剩余次数时显示未知；有缓存的参考图可复用"}>
+                                <div className={blocked || remaining === 0 ? "font-medium text-amber-600" : "font-medium text-stone-700"}>
+                                  {blocked ? "上传受限" : remaining == null ? "未知" : `剩余 ${remaining} 次`}
+                                </div>
+                                {restoreAt && new Date(restoreAt).getTime() > Date.now() ? (
+                                  <div>约 {Math.ceil((new Date(restoreAt).getTime() - Date.now()) / 60000)} 分钟后恢复</div>
+                                ) : expired ? <div>已到恢复时间，待验证</div> : null}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {

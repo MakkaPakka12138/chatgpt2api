@@ -1,0 +1,9 @@
+# Run with the EXISTING server deployment's docker-compose.yml.
+# This file changes only the image/build source; existing mounts, environment,
+# ports, container name and restart policy are inherited.
+services:
+  app:
+    image: chatgpt2api-fork:20260929
+    build:
+      context: /home/server/code/chatgpt2api-fork
+      dockerfile: Dockerfile
