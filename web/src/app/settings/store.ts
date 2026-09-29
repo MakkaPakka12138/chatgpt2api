@@ -122,6 +122,7 @@ function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
 }
 
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
+  const accountSchedulingMode = config.account_scheduling_mode === "sequential" ? "sequential" : "round_robin";
   const defaultThinkingEffort = ["standard", "extended", "max"].includes(String(config.default_thinking_effort))
     ? config.default_thinking_effort as "standard" | "extended" | "max"
     : "auto";
@@ -187,6 +188,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     global_system_prompt: String(config.global_system_prompt || ""),
     default_upstream_model_name: String(config.default_upstream_model_name || "gpt-5-5"),
     default_thinking_effort: defaultThinkingEffort,
+    account_scheduling_mode: accountSchedulingMode,
     sensitive_words: Array.isArray(config.sensitive_words) ? config.sensitive_words : [],
     ai_review: {
       enabled: Boolean(config.ai_review?.enabled),
@@ -295,6 +297,7 @@ type SettingsStore = {
   setImageRetentionDays: (value: string) => void;
   setImagePollTimeoutSecs: (value: string) => void;
   setImageAccountConcurrency: (value: string) => void;
+  setAccountSchedulingMode: (value: "round_robin" | "sequential") => void;
   setImageSettleEnabled: (value: boolean) => void;
   setImageCheckBeforeHitEnabled: (value: boolean) => void;
   setImageRemoveConversationAfterResult: (value: boolean) => void;
@@ -532,6 +535,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setImageAccountConcurrency: (value) => {
     set((state) => state.config ? { config: { ...state.config, image_account_concurrency: value } } : {});
+  },
+
+  setAccountSchedulingMode: (value) => {
+    set((state) => state.config ? { config: { ...state.config, account_scheduling_mode: value } } : {});
   },
 
   setImageSettleEnabled: (value) => {

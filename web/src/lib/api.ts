@@ -156,6 +156,7 @@ export type ThirdPartyAppsSettings = {
 };
 
 export type SettingsConfig = {
+  account_scheduling_mode?: "round_robin" | "sequential";
   proxy: string;
   base_url?: string;
   global_system_prompt?: string;

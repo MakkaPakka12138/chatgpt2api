@@ -26,6 +26,7 @@ export function ConfigCard() {
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setImagePollTimeoutSecs = useSettingsStore((state) => state.setImagePollTimeoutSecs);
   const setImageAccountConcurrency = useSettingsStore((state) => state.setImageAccountConcurrency);
+  const setAccountSchedulingMode = useSettingsStore((state) => state.setAccountSchedulingMode);
   const setImageSettleEnabled = useSettingsStore((state) => state.setImageSettleEnabled);
   const setImageRemoveConversationAfterResult = useSettingsStore((state) => state.setImageRemoveConversationAfterResult);
   const setImageRemoveConversationAlways = useSettingsStore((state) => state.setImageRemoveConversationAlways);
@@ -196,6 +197,22 @@ export function ConfigCard() {
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">单位秒，等待上游图片结果的最长时间。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">账号调度模式</label>
+            <Select
+              value={config?.account_scheduling_mode || "round_robin"}
+              onValueChange={(value) => setAccountSchedulingMode(value as "round_robin" | "sequential")}
+            >
+              <SelectTrigger className="h-10 rounded-xl border-stone-200 bg-white" aria-label="账号调度模式">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="round_robin">轮询</SelectItem>
+                <SelectItem value="sequential">顺序使用（一个号一个号用）</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-5 text-stone-500">轮询分散请求；顺序使用优先选择列表中靠前的可用账号，额度不足、异常或并发已满时使用后续账号。适用于文本对话和生图，保存后立即生效。</p>
           </div>
           <div className="space-y-2">
             <label className="text-sm text-stone-700">单账号图片并发</label>

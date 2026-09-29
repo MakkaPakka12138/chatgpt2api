@@ -560,8 +560,13 @@ class ConfigStore:
             return "0.0.0"
         return value or "0.0.0"
 
+    @property
+    def account_scheduling_mode(self) -> str:
+        return "sequential" if self.data.get("account_scheduling_mode") == "sequential" else "round_robin"
+
     def get(self) -> dict[str, object]:
         data = dict(self.data)
+        data["account_scheduling_mode"] = self.account_scheduling_mode
         data["refresh_account_interval_minute"] = self.refresh_account_interval_minute
         data["image_retention_days"] = self.image_retention_days
         data["image_poll_timeout_secs"] = self.image_poll_timeout_secs
@@ -610,6 +615,8 @@ class ConfigStore:
         return _normalize_third_party_apps_settings(self.data.get("third_party_apps"))
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
+        if "account_scheduling_mode" in data and data["account_scheduling_mode"] not in ("round_robin", "sequential"):
+            raise ValueError("账号调度模式必须为轮询或顺序使用")
         next_data = dict(self.data)
         next_data.update(dict(data or {}))
         if "backup" in next_data:

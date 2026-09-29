@@ -1105,15 +1105,22 @@ class AccountService:
                     )
                 tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests)
                 if tokens:
-                    if reference_digests:
+                    if reference_digests and config.account_scheduling_mode == "round_robin":
                         # Reuse a complete set of references before spending another account's uploads.
                         cached = [token for token in tokens if reference_upload_cache.missing(token, reference_digests) == 0]
                         tokens = cached or tokens
-                    access_token = tokens[self._index % len(tokens)]
-                    self._index += 1
+                    access_token = self._select_candidate_locked(tokens)
                     self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
                     return access_token
                 self._image_slot_condition.wait(timeout=1.0)
+
+    def _select_candidate_locked(self, tokens: list[str]) -> str:
+        """Called under the account lock; sequential mode follows stored account order."""
+        if config.account_scheduling_mode == "sequential":
+            return tokens[0]
+        token = tokens[self._index % len(tokens)]
+        self._index += 1
+        return token
 
     def release_image_slot(self, access_token: str) -> None:
         if not access_token:
@@ -1207,8 +1214,7 @@ class AccountService:
                 raise ModelUnavailableError(
                     f"model {requested_model!r} is not available to any active account"
                 )
-            access_token = candidates[self._index % len(candidates)]
-            self._index += 1
+            access_token = self._select_candidate_locked(candidates)
         return self.refresh_access_token(access_token, event="get_text_access_token") or access_token
 
     def mark_text_used(self, access_token: str) -> None:
