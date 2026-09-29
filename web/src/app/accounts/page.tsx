@@ -115,10 +115,12 @@ function formatRestoreAt(value?: string | null) {
   }
 
   const diffMs = Math.max(0, date.getTime() - Date.now());
-  const totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
-  const days = Math.floor(totalHours / 24);
-  const hours = totalHours % 24;
-  const relative = diffMs > 0 ? `剩余 ${days}d ${hours}h` : "已到恢复时间";
+  const minutes = Math.ceil(diffMs / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const duration = days > 0 ? `${days}天${hours % 24 ? `${hours % 24}小时` : ""}`
+    : hours > 0 ? `${hours}小时${minutes % 60 ? `${minutes % 60}分` : ""}` : `${minutes}分钟`;
+  const relative = diffMs > 0 ? `${duration}后恢复` : "待刷新";
 
   const pad = (num: number) => String(num).padStart(2, "0");
   const absolute = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
@@ -135,8 +137,8 @@ function formatQuotaSummary(accounts: Account[]) {
 
 function maskToken(token?: string) {
   if (!token) return "—";
-  if (token.length <= 18) return token;
-  return `${token.slice(0, 16)}...${token.slice(-8)}`;
+  if (token.length <= 12) return token;
+  return `${token.slice(0, 6)}…${token.slice(-4)}`;
 }
 
 function downloadTokens(accounts: Account[]) {
@@ -1035,7 +1037,7 @@ function AccountsPageContent() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1000px] text-left">
+              <table className="w-full min-w-[1100px] whitespace-nowrap text-left">
                 <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
                   <tr>
                     <th className="w-12 px-4 py-3">
@@ -1044,15 +1046,12 @@ function AccountsPageContent() {
                         onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
                       />
                     </th>
-                    <th className="w-56 px-4 py-3">token</th>
-                    <th className="w-28 px-4 py-3">类型</th>
-                    <th className="w-24 px-4 py-3">来源</th>
-                    <th className="w-24 px-4 py-3">状态</th>
+                    <th className="w-32 px-4 py-3">token</th>
+                    <th className="w-32 px-4 py-3">账号状态</th>
                     <th className="w-56 px-4 py-3">账号信息</th>
                     <th className="w-32 px-4 py-3">创建时间</th>
-                    <th className="w-24 px-4 py-3">额度</th>
-                    <th className="w-44 px-4 py-3">上传额度</th>
-                    <th className="w-40 px-4 py-3">恢复时间</th>
+                    <th className="w-36 px-4 py-3">图片额度</th>
+                    <th className="w-36 px-4 py-3">上传额度</th>
                     <th className="w-18 px-4 py-3">在途</th>
                     <th className="w-18 px-4 py-3">成功</th>
                     <th className="w-18 px-4 py-3">失败</th>
@@ -1083,7 +1082,7 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <span className="font-medium tracking-tight text-stone-700">
+                            <span className="font-mono text-xs font-medium tracking-tight text-stone-700">
                               {maskToken(account.access_token)}
                             </span>
                             <button
@@ -1093,29 +1092,25 @@ function AccountsPageContent() {
                                 void navigator.clipboard.writeText(account.access_token);
                                 toast.success("token 已复制");
                               }}
+                              aria-label="复制完整 Token"
                             >
                               <Copy className="size-4" />
                             </button>
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant="secondary" className="rounded-md bg-stone-100 text-stone-700">
-                            {displayAccountType(account)}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant="outline" className="rounded-md border-stone-200 text-stone-600">
-                            {displayAccountSource(account)}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
+                          <div className="space-y-1">
                           <Badge
                             variant={status.badge}
-                            className="inline-flex items-center gap-1 rounded-md px-2 py-1"
+                            className="inline-flex items-center gap-1 rounded-md px-2 py-0.5"
                           >
                             <StatusIcon className="size-3.5" />
                             {account.status}
                           </Badge>
+                          <div className="text-xs text-stone-500">
+                            {displayAccountType(account)} · {displayAccountSource(account)}
+                          </div>
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
@@ -1132,9 +1127,10 @@ function AccountsPageContent() {
                           })()}
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant="info" className="rounded-md">
-                            {formatQuota(account)}
-                          </Badge>
+                          <div className="space-y-0.5 text-xs leading-5 text-stone-500" title={formatRestoreAt(account.restore_at).absolute}>
+                            <div className="font-medium text-sky-600">{formatQuota(account)} 次</div>
+                            {account.restore_at ? <div>{formatRestoreAt(account.restore_at).relative}</div> : null}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {
@@ -1146,24 +1142,13 @@ function AccountsPageContent() {
                             const remaining = expired ? null : account.upload_remaining;
                             const restoreAt = blocked ? account.upload_blocked_until : account.upload_reset_at;
                             return (
-                              <div className="space-y-0.5" title={account.upload_last_error || "上游未提供剩余次数时显示未知；有缓存的参考图可复用"}>
+                              <div className="space-y-0.5" title={[account.upload_last_error || "上游未提供剩余次数时显示未知；有缓存的参考图可复用", restoreAt ? formatRestoreAt(restoreAt).absolute : ""].filter(Boolean).join("\n")}>
                                 <div className={blocked || remaining === 0 ? "font-medium text-amber-600" : "font-medium text-stone-700"}>
-                                  {blocked ? "上传受限" : remaining == null ? "未知" : `剩余 ${remaining} 次`}
+                                  {blocked ? "受限" : remaining == null ? "未知" : `${remaining} 次`}
                                 </div>
                                 {restoreAt && new Date(restoreAt).getTime() > Date.now() ? (
-                                  <div>约 {Math.ceil((new Date(restoreAt).getTime() - Date.now()) / 60000)} 分钟后恢复</div>
-                                ) : expired ? <div>已到恢复时间，待验证</div> : null}
-                              </div>
-                            );
-                          })()}
-                        </td>
-                        <td className="px-4 py-3 text-xs leading-5 text-stone-500">
-                          {(() => {
-                            const restore = formatRestoreAt(account.restore_at);
-                            return (
-                              <div className="space-y-0.5">
-                                {restore.relative ? <div className="font-medium text-stone-700">{restore.relative}</div> : null}
-                                <div>{restore.absolute}</div>
+                                  <div>{formatRestoreAt(restoreAt).relative}</div>
+                                ) : expired ? <div>待刷新</div> : null}
                               </div>
                             );
                           })()}
