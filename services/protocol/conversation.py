@@ -17,6 +17,7 @@ from services.config import config
 from services.image_storage_service import image_storage_service
 from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
 from services.reference_uploads import UploadLimitError, reference_upload_cache
+from services.reference_conversation_cleanup import reference_conversation_cleanup
 from utils.helper import (
     IMAGE_MODELS,
     extract_image_from_message_content,
@@ -824,6 +825,14 @@ def _remove_image_conversation_later(
         return
     if not (config.image_remove_conversation_always or (success and config.image_remove_conversation_after_result)):
         return
+    reference_ids = getattr(backend, "_reference_file_ids", None)
+    if isinstance(reference_ids, list) and reference_ids:
+        try:
+            reference_conversation_cleanup.defer(backend.access_token, conversation_id, reference_ids)
+        except Exception as exc:
+            logger.warning({"event": "reference_conversation_cleanup_schedule_failed",
+                            "conversation_id": conversation_id, "error_type": type(exc).__name__})
+        return
 
     def _run() -> None:
         try:
@@ -1315,6 +1324,8 @@ def _generate_single_image(
     conn_timeout_retry_count = 0
     poll_timeout_retry_count = 0
     upload_retry_count = 0
+    cached_reference_retry_count = 0
+    preferred_token: str | None = None
     upload_error: UploadLimitError | None = None
     excluded_upload_tokens: set[str] = set()
     reference_digests = tuple(
@@ -1335,7 +1346,9 @@ def _generate_single_image(
                 plan_types=("plus", "team", "pro") if codex_model and not plan_type else None,
                 reference_digests=reference_digests,
                 excluded_tokens=excluded_upload_tokens,
+                **({"preferred_token": preferred_token} if preferred_token else {}),
             )
+            preferred_token = None
         except AccountSelectionError as exc:
             if upload_error is not None and exc.code == "insufficient_quota":
                 raise ImageGenerationError(f"{upload_error}；没有其他满足额度条件的账号可重试", status_code=429,
@@ -1516,6 +1529,19 @@ def _generate_single_image(
             last_error = str(exc)
             # Upstream may remove a cached reference before our conservative TTL expires.
             error_body = json.dumps(getattr(exc, "body", ""), ensure_ascii=False).lower()
+            if (reference_digests and not emitted_for_token and cached_reference_retry_count < 1
+                    and getattr(backend, "_reference_cache_reused", False) is True
+                    and getattr(exc, "status_code", None) == 500
+                    and getattr(exc, "context", "") == "/backend-api/f/conversation"
+                    and getattr(exc, "body", None) in ("", None)):
+                cached_reference_retry_count += 1
+                reference_upload_cache.invalidate(token, getattr(backend, "_reference_file_ids", []))
+                preferred_token = token  # Revalidate upload quota, then re-upload on the same account if eligible.
+                logger.warning({"event": "reference_upload_cache_retry", "account_email": account_email,
+                                "reason": "cached_reference_empty_500", "retry_count": cached_reference_retry_count,
+                                "index": index})
+                time.sleep(1)
+                continue
             if reference_digests and any(code in error_body for code in ("file_not_found", "invalid_file_id", "file_expired")):
                 reference_upload_cache.invalidate(token)
                 if not emitted_for_token and upload_retry_count < 1:

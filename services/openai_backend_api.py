@@ -182,6 +182,8 @@ class OpenAIBackendAPI:
         self.pow_script_sources: list[str] = []
         self.pow_data_build = ""
         self.progress_callback: Callable[[str], None] | None = None
+        self._reference_file_ids: list[str] = []
+        self._reference_cache_reused = False
         self.session = requests.Session(**proxy_settings.build_session_kwargs(
             account=self.account,
             impersonate=self.fp["impersonate"],
@@ -220,6 +222,7 @@ class OpenAIBackendAPI:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        reference_upload_cache.release(getattr(self, "access_token", ""), getattr(self, "_reference_file_ids", []))
         session = getattr(self, "session", None)
         if session:
             try:
@@ -934,7 +937,14 @@ class OpenAIBackendAPI:
                 account_service.finish_upload(self.access_token, reserved, created)
             return result
         # A file ID belongs to its upstream account and cannot be shared across tokens.
-        return reference_upload_cache.get_or_upload(self.access_token, data, upload)
+        def reused() -> None:
+            self._reference_cache_reused = True
+        result = reference_upload_cache.get_or_upload(self.access_token, data, upload,
+                                                      retain=True, on_reuse=reused)
+        if not hasattr(self, "_reference_file_ids"):
+            self._reference_file_ids = []
+        self._reference_file_ids.append(result["file_id"])
+        return result
 
     def _upload_image_data(self, data: bytes, file_name: str, on_created: Callable[[], None]) -> Dict[str, Any]:
         """Create, transfer, and confirm a new upstream file (cache misses only)."""

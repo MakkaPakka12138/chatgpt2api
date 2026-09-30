@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from threading import Condition
 from typing import Any, Callable
@@ -85,6 +86,7 @@ class ReferenceUploadCache:
         self._condition = Condition()
         self._entries: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
         self._pending: set[tuple[str, str]] = set()
+        self._active: Counter[tuple[str, str]] = Counter()
 
     @staticmethod
     def digest(data: bytes) -> str:
@@ -102,19 +104,48 @@ class ReferenceUploadCache:
             return sum((token, digest) not in self._entries and (token, digest) not in self._pending
                        for digest in set(digests))
 
-    def invalidate(self, token: str) -> None:
+    def invalidate(self, token: str, file_ids: list[str] | None = None) -> None:
         with self._condition:
             for key in list(self._entries):
-                if key[0] == token:
+                if key[0] == token and (file_ids is None or self._entries[key][1].get("file_id") in file_ids):
                     self._entries.pop(key, None)
+            self._condition.notify_all()
 
-    def get_or_upload(self, token: str, data: bytes, upload: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def protected(self, token: str, file_ids: list[str]) -> bool:
+        """A conversation may be deleted only after its files are neither cached nor in use."""
+        wanted = set(file_ids)
+        with self._condition:
+            self._prune()
+            return any(self._active[(token, file_id)] > 0 for file_id in wanted) or any(
+                key[0] == token and value.get("file_id") in wanted
+                for key, (_, value) in self._entries.items()
+            )
+
+    def release(self, token: str, file_ids: list[str]) -> None:
+        with self._condition:
+            for file_id in file_ids:
+                key = (token, file_id)
+                if self._active[key] <= 1:
+                    self._active.pop(key, None)
+                else:
+                    self._active[key] -= 1
+            self._condition.notify_all()
+
+    def _retain(self, token: str, value: dict[str, Any], retain: bool) -> None:
+        if retain and value.get("file_id"):
+            self._active[(token, value["file_id"])] += 1
+
+    def get_or_upload(self, token: str, data: bytes, upload: Callable[[], dict[str, Any]], *,
+                      retain: bool = False, on_reuse: Callable[[], None] | None = None) -> dict[str, Any]:
         key = (token, self.digest(data))
         with self._condition:
             while True:
                 self._prune()
                 cached = self._entries.get(key)
                 if cached:
+                    self._retain(token, cached[1], retain)
+                    if on_reuse is not None:
+                        on_reuse()
                     return dict(cached[1])
                 if key not in self._pending:
                     self._pending.add(key)
@@ -127,6 +158,7 @@ class ReferenceUploadCache:
                     oldest = min(self._entries, key=lambda k: self._entries[k][0])
                     self._entries.pop(oldest, None)
                 self._entries[key] = (time.monotonic() + self.ttl, dict(result))
+                self._retain(token, result, retain)
             return dict(result)
         finally:
             with self._condition:

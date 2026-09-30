@@ -1098,6 +1098,7 @@ class AccountService:
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
             reference_digests: tuple[str, ...] = (),
+            preferred_token: str | None = None,
     ) -> str:
         with self._image_slot_condition:
             while True:
@@ -1107,7 +1108,10 @@ class AccountService:
                     )
                 tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests)
                 if tokens:
-                    if reference_digests and config.account_scheduling_mode == "round_robin":
+                    preferred = self._resolve_access_token_locked(preferred_token or "")
+                    if preferred in tokens:
+                        tokens = [preferred]
+                    elif reference_digests and config.account_scheduling_mode == "round_robin":
                         # Reuse a complete set of references before spending another account's uploads.
                         cached = [token for token in tokens if reference_upload_cache.missing(token, reference_digests) == 0]
                         tokens = cached or tokens
@@ -1143,6 +1147,7 @@ class AccountService:
             plan_types: set[str] | tuple[str, ...] | None = None,
             reference_digests: tuple[str, ...] = (),
             excluded_tokens: set[str] | None = None,
+            preferred_token: str | None = None,
     ) -> str:
         """从候选池中获取一个可用的图片生图 token。
 
@@ -1161,6 +1166,7 @@ class AccountService:
                     source_type=source_type,
                     plan_types=plan_types,
                     reference_digests=reference_digests,
+                    preferred_token=preferred_token,
                 )
             except NoAvailableImageAccountError as exc:
                 if validation_errors:
