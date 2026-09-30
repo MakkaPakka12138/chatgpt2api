@@ -21,7 +21,7 @@ class NoAvailableImageAccountError(AccountSelectionError):
         scope = f"符合 {account_filter} 条件的" if account_filter else "可用的"
         message = f"没有{scope}生图账号，请检查账号状态和图片额度。"
         if references:
-            message += "使用新参考图时，账号上传额度须至少剩余 20 次，并足够上传本次参考图。"
+            message += "使用新参考图时，会优先选择上传额度至少剩余 20 次的账号；低额度备用账号也须足够上传本次参考图，且不在上传冷却中。"
         super().__init__(message, status_code=429, code="insufficient_quota")
 
 

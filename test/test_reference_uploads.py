@@ -115,15 +115,16 @@ class UploadAccountTests(unittest.TestCase):
         self.assertEqual(token, "reference-test-b")
         self.service.release_image_slot(token)
         self.service.update_account("reference-test-b", {"upload_remaining": 19})
-        with self.assertRaises(RuntimeError):
-            self.service.get_available_access_token(reference_digests=digests)
+        token = self.service.get_available_access_token(reference_digests=digests)
+        self.assertIn(token, {"reference-test-a", "reference-test-b"})
+        self.service.release_image_slot(token)
         self.assertFalse(self.service._image_inflight)
         self.service._index = 0
         token = self.service.get_available_access_token()
         self.assertEqual(token, "reference-test-a")
         self.service.release_image_slot(token)
 
-    def test_partial_cache_still_requires_twenty_uploads_remaining(self):
+    def test_partial_cache_prefers_accounts_with_twenty_uploads_remaining(self):
         self.service.update_account("reference-test-a", {"upload_remaining": 19})
         reference_upload_cache.get_or_upload("reference-test-a", b"cached", lambda: {"file_id": "cached"})
         digests = tuple(reference_upload_cache.digest(data) for data in (b"cached", b"new"))

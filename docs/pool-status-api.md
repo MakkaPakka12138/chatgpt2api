@@ -20,7 +20,7 @@
 | `uploads.known_remaining_total` | 调度池内Web账号的已知上传余量总和，含禁用等账号；不含未知余量及Codex账号 |
 | `uploads.available_known_remaining` | 符合新上传条件账号的已知上传余量之和 |
 | `uploads.unknown_accounts`、`low_accounts`、`blocked_accounts` | Web账号未知额度、低于20、上传冷却中数量；这些分类可能重叠 |
-| `uploads.eligible_accounts` | 正常、有生图余量、没有上传冷却且上传余量未知或至少20的Web账号数；不考虑缓存命中或本次具体参考图数量 |
+| `uploads.eligible_accounts` | 正常、有生图余量、没有上传冷却且上传余量未知或至少20的Web优先账号数；不含低额度备用账号，不考虑缓存命中或本次具体参考图数量 |
 | `uploads.not_applicable_accounts`、`switch_threshold` | Codex账号数及提前切号门槛20 |
 | `images.next_reset_at`、`uploads.next_reset_at` | 已知且尚未到达的最早恢复时间，UTC格式；缺失为null |
 | `cache.updated_at`、`age_seconds` | 缓存生成时间及距生成的秒数 |

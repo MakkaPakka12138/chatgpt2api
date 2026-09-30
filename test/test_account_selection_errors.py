@@ -75,9 +75,9 @@ class AccountSelectionTests(unittest.TestCase):
         self.assertEqual(self.logs.call_args.args[2]["upstream_status"], 403)
         self.assertEqual(self.logs.call_args.args[2]["account_email"], "a@example.test")
 
-    def test_real_upload_threshold_exhaustion_returns_quota_429(self):
+    def test_real_upload_exhaustion_returns_quota_429(self):
         for account in self.service.list_accounts():
-            self.service.update_account(account["access_token"], {"upload_remaining": 19}, quiet=True)
+            self.service.update_account(account["access_token"], {"upload_remaining": 0}, quiet=True)
         self.service.fetch_remote_info = lambda token, event="": self.fail("Should not validate filtered accounts")
         with self.assertRaises(NoAvailableImageAccountError) as raised:
             self.service.get_available_access_token(reference_digests=("fresh-reference",))

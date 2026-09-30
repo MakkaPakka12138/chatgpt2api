@@ -248,7 +248,17 @@ class AccountService:
         if blocked_until is not None and blocked_until > time.time():
             return False
         remaining = upload_remaining(account)
-        # Switch before new uploads drain an account; cached references spend no uploads.
+        return remaining is None or remaining >= needed
+
+    @staticmethod
+    def _has_preferred_upload_quota(account: dict, reference_digests: tuple[str, ...]) -> bool:
+        """Low upload quota is a fallback priority, not a hard exclusion."""
+        if not reference_digests:
+            return True
+        needed = reference_upload_cache.missing(str(account.get("access_token") or ""), reference_digests)
+        if needed == 0:
+            return True
+        remaining = upload_remaining(account)
         return remaining is None or remaining >= max(20, needed)
 
     def reserve_upload(self, access_token: str) -> bool:
@@ -1111,19 +1121,24 @@ class AccountService:
                 tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests)
                 if tokens:
                     preferred = self._resolve_access_token_locked(preferred_token or "")
-                    if preferred in tokens:
-                        tokens = [preferred]
-                    elif reference_digests and config.account_scheduling_mode == "round_robin":
-                        # Reuse a complete set of references before spending another account's uploads.
-                        cached = [token for token in tokens if reference_upload_cache.missing(token, reference_digests) == 0]
-                        tokens = cached or tokens
+                    primary = [token for token in tokens if self._has_preferred_upload_quota(
+                        self._accounts[token], reference_digests)]
+                    fallback = [token for token in tokens if token not in primary]
                     from services.proxy_pool_service import proxy_pool
-                    while tokens:
-                        access_token = self._select_candidate_locked(tokens)
-                        if proxy_pool.reserve(self._accounts[access_token]):
-                            self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
-                            return access_token
-                        tokens.remove(access_token)
+                    for tier in (primary, fallback):
+                        while tier:
+                            choices = tier
+                            if preferred in tier:
+                                choices = [preferred]
+                            elif reference_digests and config.account_scheduling_mode == "round_robin":
+                                # Reuse references first within the current quota tier.
+                                cached = [token for token in tier if reference_upload_cache.missing(token, reference_digests) == 0]
+                                choices = cached or tier
+                            access_token = self._select_candidate_locked(choices)
+                            if proxy_pool.reserve(self._accounts[access_token]):
+                                self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
+                                return access_token
+                            tier.remove(access_token)
                 self._image_slot_condition.wait(timeout=1.0)
 
     def _select_candidate_locked(self, tokens: list[str]) -> str:

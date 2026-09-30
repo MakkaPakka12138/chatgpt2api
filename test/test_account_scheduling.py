@@ -58,6 +58,59 @@ class AccountSchedulingTests(unittest.TestCase):
             self.service.release_image_slot(second)
             self.assertEqual(self.select_image(), "schedule-a")
 
+    def test_low_upload_quota_is_used_only_after_primary_candidates(self):
+        digests = (reference_upload_cache.digest(b"fallback-reference"),)
+        self.service.update_account("schedule-a", {"upload_remaining": 1})
+        for mode in ("sequential", "round_robin"):
+            with self.subTest(mode=mode), patch.dict(config.data, {"account_scheduling_mode": mode}):
+                self.assertEqual(self.select_image(reference_digests=digests, preferred_token="schedule-a"), "schedule-b")
+                self.assertEqual(self.select_image(reference_digests=digests, excluded_tokens={"schedule-b"}), "schedule-a")
+        self.service.update_account("schedule-b", {"quota": 0})
+        self.assertEqual(self.select_image(reference_digests=digests), "schedule-a")
+
+    def test_failed_primary_validation_falls_back_and_releases_slots(self):
+        digests = (reference_upload_cache.digest(b"fallback-reference"),)
+        self.service.update_account("schedule-a", {"upload_remaining": 19})
+        calls = []
+        def validate(token, event=""):
+            calls.append(token)
+            if token == "schedule-b":
+                raise TimeoutError("upstream timeout")
+            return self.service.get_account(token)
+        self.service.fetch_remote_info = validate
+        self.assertEqual(self.select_image(reference_digests=digests), "schedule-a")
+        self.assertEqual(calls, ["schedule-b", "schedule-a"])
+        self.assertFalse(self.service._image_inflight)
+
+    def test_low_quota_cannot_override_needed_uploads_or_cooldown(self):
+        from services.account_selection_errors import NoAvailableImageAccountError
+        digests = tuple(reference_upload_cache.digest(data) for data in (b"one", b"two"))
+        self.service.update_account("schedule-a", {"upload_remaining": 1})
+        self.service.update_account("schedule-b", {"quota": 0})
+        with self.assertRaises(NoAvailableImageAccountError):
+            self.select_image(reference_digests=digests)
+        self.service.update_account("schedule-a", {"upload_remaining": 2})
+        self.assertEqual(self.select_image(reference_digests=digests), "schedule-a")
+        self.service.mark_upload_limited("schedule-a", "limit", 60)
+        with self.assertRaises(NoAvailableImageAccountError):
+            self.select_image(reference_digests=digests)
+
+    def test_busy_primary_proxy_allows_low_upload_fallback(self):
+        digests = (reference_upload_cache.digest(b"fallback-reference"),)
+        self.service.update_account("schedule-a", {"upload_remaining": 19})
+        with patch("services.proxy_pool_service.proxy_pool.reserve", side_effect=lambda account: account['access_token'] == 'schedule-a'), \
+                patch("services.proxy_pool_service.proxy_pool.release"):
+            self.assertEqual(self.select_image(reference_digests=digests), "schedule-a")
+
+    def test_busy_primary_account_allows_low_upload_fallback(self):
+        digests = (reference_upload_cache.digest(b"fallback-reference"),)
+        self.service.update_account("schedule-a", {"upload_remaining": 19})
+        with patch.dict(config.data, {"image_account_concurrency": 1}):
+            primary = self.service.get_available_access_token(reference_digests=digests)
+            self.addCleanup(self.service.release_image_slot, primary)
+            self.assertEqual(primary, "schedule-b")
+            self.assertEqual(self.select_image(reference_digests=digests), "schedule-a")
+
     def test_modes_can_switch_live_for_text_and_images(self):
         self.assertEqual([self.service.get_text_access_token() for _ in range(2)], ["schedule-a"] * 2)
         self.assertEqual(self.service.get_text_access_token(excluded_tokens={"schedule-a"}), "schedule-b")
