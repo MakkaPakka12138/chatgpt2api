@@ -45,6 +45,8 @@ import {
 import {
   deleteAccounts,
   fetchAccounts,
+  fetchProxyPool,
+  type ProxyPoolState,
   fetchModels,
   fetchRefreshProgress,
   fetchReLoginProgress,
@@ -180,6 +182,8 @@ function AccountsPageContent() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [editStatus, setEditStatus] = useState<AccountStatus>("正常");
   const [editProxy, setEditProxy] = useState("");
+  const [editProxyChoice, setEditProxyChoice] = useState("auto");
+  const [proxyPool, setProxyPool] = useState<ProxyPoolState | null>(null);
   const [isTestingProxy, setIsTestingProxy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingModels, setIsLoadingModels] = useState(true);
@@ -242,11 +246,19 @@ function AccountsPageContent() {
     didLoadRef.current = true;
     void loadAccounts();
     void loadModels();
+    void fetchProxyPool().then(setProxyPool).catch(() => {});
 
     // 清理进度条定时器
     return () => {
       if (progressRef.current) clearInterval(progressRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void fetchAccounts().then(data => setAccounts(data.items)).catch(() => {});
+    }, 15000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -655,6 +667,8 @@ function AccountsPageContent() {
     setEditingAccount(account);
     setEditStatus(account.status);
     setEditProxy(account.proxy ?? "");
+    setEditProxyChoice(account.proxy_assignment?.choice ?? (account.proxy ? "legacy" : "auto"));
+    void fetchProxyPool().then(setProxyPool).catch(() => {});
   };
 
   const handleTestAccountProxy = async () => {
@@ -685,7 +699,8 @@ function AccountsPageContent() {
     try {
       const data = await updateAccount(editingAccount.access_token, {
         status: editStatus,
-        proxy: editProxy.trim(),
+        proxy: editProxyChoice === "legacy" ? editProxy.trim() : "",
+        proxy_pool_choice: editProxyChoice,
       });
       setAccounts(data.items);
       setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
@@ -807,7 +822,19 @@ function AccountsPageContent() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-stone-700">账号代理</label>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <Select value={editProxyChoice} onValueChange={setEditProxyChoice}>
+                <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">自动分配（没有可用代理时用统一代理）</SelectItem>
+                  <SelectItem value="global">使用统一代理</SelectItem>
+                  <SelectItem value="legacy">手动填写专属代理</SelectItem>
+                  {(proxyPool?.items ?? []).map(node => <SelectItem key={node.id} value={node.id} disabled={!node.enabled || node.status !== "healthy"}>
+                    {node.name} · {node.exit_ip || "待检测"}{node.status !== "healthy" ? "（暂不可选）" : ""}
+                  </SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-stone-500">{proxyPool?.enabled ? "代理池已开启，故障时整批账号会自动迁移。" : "代理池未开启，池内分配暂不生效，使用原有代理设置。"}</p>
+              {editProxyChoice === "legacy" && <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
                   value={editProxy}
                   onChange={(event) => setEditProxy(event.target.value)}
@@ -823,7 +850,7 @@ function AccountsPageContent() {
                   {isTestingProxy ? <LoaderCircle className="size-4 animate-spin" /> : <Link2 className="size-4" />}
                   测试
                 </Button>
-              </div>
+              </div>}
             </div>
           </div>
           <DialogFooter className="pt-2">
@@ -1118,6 +1145,11 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
+                          <button type="button" onClick={() => openEditDialog(account)} className="mt-1 flex items-center gap-1 text-xs text-sky-600 hover:underline" aria-label="修改账号代理">
+                            <Link2 className="size-3" />{account.proxy_assignment?.name ?? (account.proxy ? "专属代理" : "统一代理")}
+                          </button>
+                          {account.proxy_assignment?.exit_ip && <div className="font-mono text-[11px] text-stone-400">{account.proxy_assignment.exit_ip}</div>}
+                          {account.proxy_assignment?.assigned_name && !account.proxy_assignment.pool_enabled && <div className="text-[11px] text-stone-400">已选 {account.proxy_assignment.assigned_name} · 池未开启</div>}
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {

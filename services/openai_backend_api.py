@@ -175,6 +175,7 @@ class OpenAIBackendAPI:
         self.access_token = access_token
         self.account = account_service.get_account(self.access_token) if self.access_token else {}
         self.account = self.account if isinstance(self.account, dict) else {}
+        self.account = proxy_settings.freeze_account(self.account)
         self.fp = self._build_fp()
         self.user_agent = self.fp["user-agent"]
         self.device_id = self.fp["oai-device-id"]
@@ -184,11 +185,12 @@ class OpenAIBackendAPI:
         self.progress_callback: Callable[[str], None] | None = None
         self._reference_file_ids: list[str] = []
         self._reference_cache_reused = False
-        self.session = requests.Session(**proxy_settings.build_session_kwargs(
+        self.session = proxy_settings.create_session(
             account=self.account,
+            session_class=requests.Session,
             impersonate=self.fp["impersonate"],
             verify=True,
-        ))
+        )
         self.session.headers.update({
             "User-Agent": self.user_agent,
             "Origin": self.base_url,

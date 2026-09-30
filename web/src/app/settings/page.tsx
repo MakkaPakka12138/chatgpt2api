@@ -13,6 +13,7 @@ import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
 import { ProxyRuntimeCard } from "./components/proxy-runtime-card";
+import { ProxyPoolCard } from "./components/proxy-pool-card";
 import { SettingsHeader } from "./components/settings-header";
 import { Sub2APIConnections } from "./components/sub2api-connections";
 import { ThirdPartyAppsCard } from "./components/third-party-apps-card";
@@ -26,6 +27,7 @@ const settingsTabs = [
   { value: "api-docs", title: "接口接入" },
   { value: "canvas", title: "画布入口" },
   { value: "proxy", title: "FlareSolverr" },
+  { value: "proxy-pool", title: "代理池" },
   { value: "cpa", title: "CPA" },
   { value: "sub2api", title: "Sub2API" },
 ];
@@ -95,6 +97,7 @@ function SettingsPageContent() {
         <TabsContent value="proxy">
           <ProxyRuntimeCard />
         </TabsContent>
+        <TabsContent value="proxy-pool"><ProxyPoolCard /></TabsContent>
         <TabsContent value="backup">
           <BackupSettingsCard />
         </TabsContent>

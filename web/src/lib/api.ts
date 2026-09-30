@@ -1,5 +1,23 @@
 import { httpRequest, request } from "@/lib/request";
 
+export type ProxyPoolNode = {
+  id: string; name: string; address: string; enabled: boolean; status: string;
+  exit_ip: string; bound_accounts: number; inflight: number; max_concurrency: number;
+  failures: number; checked_at: number; next_check_at: number; latency_ms?: number;
+  category?: string; http_status?: number;
+};
+export type ProxyPoolState = {
+  enabled: boolean; check_interval_seconds: number; items: ProxyPoolNode[];
+  events: Array<{ time: number; from_id: string; to_id: string; accounts: number; reason: string }>;
+};
+export const fetchProxyPool = () => httpRequest<ProxyPoolState>("/api/proxy-pool");
+export const setProxyPoolSettings = (enabled: boolean, check_interval_seconds = 300) =>
+  httpRequest<ProxyPoolState>("/api/proxy-pool/settings", { method: "POST", body: { enabled, check_interval_seconds } });
+export const saveProxyPoolNode = (body: {name: string; url?: string; enabled: boolean; max_concurrency: number}, id?: string) =>
+  httpRequest<ProxyPoolState>(`/api/proxy-pool/nodes${id ? `/${id}` : ""}`, { method: id ? "PUT" : "POST", body });
+export const deleteProxyPoolNode = (id: string) => httpRequest<ProxyPoolState>(`/api/proxy-pool/nodes/${id}`, { method: "DELETE" });
+export const checkProxyPoolNode = (id: string) => httpRequest<ProxyPoolState>(`/api/proxy-pool/nodes/${id}/check`, { method: "POST" });
+
 export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = string;
@@ -41,6 +59,10 @@ export type Account = {
   image_inflight?: number;
   last_used_at?: string | null;
   proxy?: string | null;
+  proxy_assignment?: {
+    choice: string; pool_enabled: boolean; node_id: string; assigned_id: string;
+    assigned_name: string; name: string; exit_ip: string; status: string;
+  };
 };
 
 export type AccountImportPayload = {
@@ -435,6 +457,7 @@ export async function updateAccount(
     status?: AccountStatus;
     quota?: number;
     proxy?: string;
+    proxy_pool_choice?: string;
   },
 ) {
   return httpRequest<AccountUpdateResponse>("/api/accounts/update", {

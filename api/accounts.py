@@ -24,6 +24,7 @@ from api.support import (
     sanitize_sub2api_servers,
 )
 from services.account_service import account_service
+from services.proxy_pool_service import proxy_pool
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.oauth_login_service import OAuthLoginError, oauth_login_service
 from services.sub2api_service import (
@@ -69,6 +70,7 @@ class AccountUpdateRequest(BaseModel):
     status: str | None = None
     quota: int | None = None
     proxy: str | None = None
+    proxy_pool_choice: str | None = None
 
 
 class CPAPoolCreateRequest(BaseModel):
@@ -210,7 +212,7 @@ def create_router() -> APIRouter:
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return {"items": account_service.list_accounts()}
+        return {"items": await run_in_threadpool(proxy_pool.annotate, account_service.list_accounts())}
 
     @router.post("/api/accounts")
     async def create_accounts(body: AccountCreateRequest, authorization: str | None = Header(default=None)):
@@ -361,12 +363,23 @@ def create_router() -> APIRouter:
         if not access_token:
             raise HTTPException(status_code=400, detail={"error": "access_token is required"})
         updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota, "proxy": body.proxy}.items() if value is not None}
-        if not updates:
+        if not updates and body.proxy_pool_choice is None:
             raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
+        current = account_service.get_account(access_token)
+        if current is None:
+            raise HTTPException(status_code=404, detail={"error": "account not found"})
+        choice = body.proxy_pool_choice
+        if choice is None and body.proxy:
+            choice = "legacy"
+        if choice is not None:
+            try:
+                await run_in_threadpool(proxy_pool.assign, current, choice)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         account = account_service.update_account(access_token, updates)
         if account is None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})
-        return {"item": account, "items": account_service.list_accounts()}
+        return {"item": proxy_pool.annotate([account])[0], "items": proxy_pool.annotate(account_service.list_accounts())}
 
     @router.post("/api/accounts/oauth/start")
     async def start_oauth_login(

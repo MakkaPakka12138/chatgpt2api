@@ -177,6 +177,8 @@ class AccountService:
                 for token in deleted_tokens:
                     self._image_inflight.pop(token, None)
                     reference_upload_cache.invalidate(token)
+                from services.proxy_pool_service import proxy_pool
+                proxy_pool.drop(deleted_tokens)
                 self._token_aliases = {old: new for old, new in self._token_aliases.items()
                                        if old not in deleted_tokens and new not in deleted_tokens}
                 self._save_accounts()
@@ -522,7 +524,7 @@ class AccountService:
         from curl_cffi import requests
         from services.proxy_service import proxy_settings
 
-        session = requests.Session(**proxy_settings.build_session_kwargs(account=account, impersonate="chrome110", verify=True))
+        session = proxy_settings.create_session(account=account, session_class=requests.Session, impersonate="chrome110", verify=True)
         try:
             response = session.post(
                 self._OAUTH_TOKEN_URL,
@@ -584,6 +586,8 @@ class AccountService:
 
             rotated = new_token != old_token
             if rotated:
+                from services.proxy_pool_service import proxy_pool
+                proxy_pool.transfer(old_token, new_token)
                 self._accounts.pop(old_token, None)
                 self._token_aliases[old_token] = new_token
                 old_inflight = int(self._image_inflight.pop(old_token, 0))
@@ -642,7 +646,8 @@ class AccountService:
     def _password_re_login_thread(self, access_token: str, email: str, password: str, event: str, progress_id: str | None = None) -> None:
         """密码重新登录线程入口"""
         try:
-            result = self._login_with_password(email, password)
+            account = self.get_account(access_token)
+            result = self._login_with_password(email, password, account=account)
             if result.get("ok"):
                 # 登录成功，更新账号
                 new_access_token = result.get("access_token", "")
@@ -751,7 +756,7 @@ class AccountService:
             if progress_id:
                 self.update_relogin_progress(progress_id, access_token, "异常", str(exc))
 
-    def _login_with_password(self, email: str, password: str) -> dict:
+    def _login_with_password(self, email: str, password: str, account: dict | None = None) -> dict:
         """通过邮箱+密码登录，返回 {access_token, refresh_token, id_token, ...}"""
         from curl_cffi import requests
         
@@ -764,11 +769,8 @@ class AccountService:
         user_agent = self._OAUTH_USER_AGENT
         
         # 创建 session
-        session_kwargs = {"impersonate": "chrome110", "verify": False}
-        proxy = config.get_proxy_settings()
-        if proxy:
-            session_kwargs["proxy"] = proxy
-        session = requests.Session(**session_kwargs)
+        from services.proxy_service import proxy_settings
+        session = proxy_settings.create_session(account=account, session_class=requests.Session, impersonate="chrome110", verify=False)
         
         try:
             device_id = str(uuid.uuid4())
@@ -1115,9 +1117,13 @@ class AccountService:
                         # Reuse a complete set of references before spending another account's uploads.
                         cached = [token for token in tokens if reference_upload_cache.missing(token, reference_digests) == 0]
                         tokens = cached or tokens
-                    access_token = self._select_candidate_locked(tokens)
-                    self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
-                    return access_token
+                    from services.proxy_pool_service import proxy_pool
+                    while tokens:
+                        access_token = self._select_candidate_locked(tokens)
+                        if proxy_pool.reserve(self._accounts[access_token]):
+                            self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
+                            return access_token
+                        tokens.remove(access_token)
                 self._image_slot_condition.wait(timeout=1.0)
 
     def _select_candidate_locked(self, tokens: list[str]) -> str:
@@ -1134,6 +1140,9 @@ class AccountService:
         with self._image_slot_condition:
             access_token = self._resolve_access_token_locked(access_token)
             current_inflight = int(self._image_inflight.get(access_token, 0))
+            if current_inflight:
+                from services.proxy_pool_service import proxy_pool
+                proxy_pool.release(access_token)
             if current_inflight <= 1:
                 self._image_inflight.pop(access_token, None)
             else:
@@ -1442,6 +1451,8 @@ class AccountService:
             removed = sum(self._accounts.pop(token, None) is not None for token in target_set)
             for token in target_set:
                 self._image_inflight.pop(token, None)
+            from services.proxy_pool_service import proxy_pool
+            proxy_pool.drop(target_set)
             self._token_aliases = {
                 old: new
                 for old, new in self._token_aliases.items()

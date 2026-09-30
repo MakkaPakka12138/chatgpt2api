@@ -41,6 +41,7 @@ def normalize_proxy_url(url: str) -> str:
 class ProxyRuntimeProfile:
     proxy_url: str = ""
     proxy_source: str = "direct"
+    pool_id: str = ""
     resource: bool = False
     runtime_enabled: bool = False
     egress_mode: str = "direct"
@@ -193,7 +194,14 @@ class ProxySettingsStore:
 
         selected_proxy = ""
         source = "direct"
-        if account_proxy:
+        pool_route = (account or {}).get("_proxy_pool_route")
+        if pool_route is None and self._config is config and account:
+            from services.proxy_pool_service import proxy_pool
+            pool_route = proxy_pool.route(account)
+        if pool_route and pool_route.get("url"):
+            selected_proxy = pool_route["url"]
+            source = "pool"
+        elif account_proxy and not pool_route:
             selected_proxy = account_proxy
             source = "account"
         elif runtime_proxy:
@@ -209,6 +217,7 @@ class ProxySettingsStore:
         return ProxyRuntimeProfile(
             proxy_url=normalize_proxy_url(selected_proxy),
             proxy_source=source,
+            pool_id=pool_route.get("id", "") if pool_route else "",
             resource=bool(resource),
             runtime_enabled=runtime_enabled,
             egress_mode=egress_mode,
@@ -231,6 +240,23 @@ class ProxySettingsStore:
         if profile.runtime_enabled and profile.skip_ssl_verify:
             session_kwargs["verify"] = False
         return session_kwargs
+
+    def freeze_account(self, account: dict) -> dict:
+        if "_proxy_pool_route" in account:
+            return account
+        if self._config is not config:
+            return account
+        from services.proxy_pool_service import proxy_pool
+        route = proxy_pool.route(account)
+        return {**account, "_proxy_pool_route": route} if route is not None else account
+
+    def create_session(self, account=None, session_class=Session, **kwargs):
+        account = self.freeze_account(account or {})
+        profile = self.get_profile(account=account)
+        options = self.build_session_kwargs(account=account, **kwargs)
+        if profile.pool_id:
+            return ProxyPoolSession(pool_id=profile.pool_id, **options)
+        return session_class(**options)
 
     def build_headers(
         self,
@@ -646,3 +672,20 @@ def test_clearance(target_url: str = "https://chatgpt.com") -> dict:
 
 
 proxy_settings = ProxySettingsStore()
+
+
+class ProxyPoolSession(Session):
+    """A request uses its original route; faults only schedule an independent check."""
+    def __init__(self, pool_id: str, **kwargs):
+        self.pool_id = pool_id
+        super().__init__(**kwargs)
+
+    def request(self, *args, **kwargs):
+        try:
+            return super().request(*args, **kwargs)
+        except Exception as exc:
+            from services.proxy_pool_service import proxy_pool
+            code = getattr(exc, "code", None)
+            if code in {5, 6, 7, 28, 35, 52, 55, 56, 97}:
+                proxy_pool.suspect(self.pool_id)
+            raise
