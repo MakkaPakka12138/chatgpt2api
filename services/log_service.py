@@ -214,6 +214,20 @@ def _next_item(items):
         return False, None
 
 
+def exception_log_fields(exc: Exception | None) -> dict[str, Any]:
+    """Attach internal diagnostics to admin logs, never to public API responses."""
+    if exc is None:
+        return {}
+    fields: dict[str, Any] = {}
+    if getattr(exc, "code", None):
+        fields["error_code"] = exc.code
+    if getattr(exc, "status_code", None):
+        fields["http_status"] = exc.status_code
+    if getattr(exc, "account_selection", None):
+        fields["account_selection"] = exc.account_selection
+    return fields
+
+
 @dataclass
 class LoggedCall:
     identity: dict[str, object]
@@ -231,7 +245,7 @@ class LoggedCall:
             result = await run_in_threadpool(handler, *args)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
-                     conversation_id=getattr(exc, "conversation_id", ""))
+                     conversation_id=getattr(exc, "conversation_id", ""), exception=exc)
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
@@ -253,7 +267,7 @@ class LoggedCall:
             has_first, first = await run_in_threadpool(_next_item, result)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
-                     conversation_id=getattr(exc, "conversation_id", ""))
+                     conversation_id=getattr(exc, "conversation_id", ""), exception=exc)
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
@@ -288,6 +302,7 @@ class LoggedCall:
                 urls=urls,
                 account_email=(account_emails[0] if account_emails else getattr(exc, "account_email", "")),
                 conversation_id=(conversation_ids[0] if conversation_ids else getattr(exc, "conversation_id", "")),
+                exception=exc,
             )
             if self.endpoint.startswith("/v1/images") and not hasattr(exc, "to_openai_error"):
                 from services.protocol.conversation import ImageGenerationError, public_image_error_message
@@ -300,7 +315,8 @@ class LoggedCall:
                          conversation_id=conversation_ids[0] if conversation_ids else "")
 
     def log(self, suffix: str, result: object = None, status: str = "success", error: str = "",
-            urls: list[str] | None = None, account_email: str = "", conversation_id: str = "") -> None:
+            urls: list[str] | None = None, account_email: str = "", conversation_id: str = "",
+            exception: Exception | None = None) -> None:
         detail = {
             "key_id": self.identity.get("id"),
             "key_name": self.identity.get("name"),
@@ -311,6 +327,7 @@ class LoggedCall:
             "ended_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "duration_ms": int((time.time() - self.started) * 1000),
             "status": status,
+            **exception_log_fields(exception),
         }
         request_excerpt = _request_excerpt(self.request_text)
         if request_excerpt:

@@ -27,6 +27,39 @@ const typeLabels: Record<string, string> = {
   [LogType.Account]: "账号管理日志",
 };
 
+const detailLabels: Record<string, string> = {
+  endpoint: "接口", model: "模型", status: "结果", error: "失败原因",
+  error_code: "错误类型", http_status: "返回状态", account_email: "账号",
+  duration_ms: "耗时", started_at: "开始时间", ended_at: "结束时间",
+  key_name: "密钥名称", request_text: "请求内容",
+};
+
+const errorCodeLabels: Record<string, string> = {
+  account_validation_failed: "账号验证失败",
+  account_selection_exhausted: "账号检查达到上限",
+  insufficient_quota: "账号不可用或额度不足",
+  file_upload_limit: "文件上传限额",
+};
+
+function getAccountSelection(item: SystemLog | null) {
+  const raw = item?.detail?.account_selection;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const selection = raw as Record<string, unknown>;
+  const errors = Array.isArray(selection.errors) ? selection.errors : [];
+  return {
+    attempted: Number(selection.attempted_accounts) || 0,
+    failed: Number(selection.validation_failed) || 0,
+    errors: errors.filter((error) => error && typeof error === "object").map((error) => {
+      const attempt = error as Record<string, unknown>;
+      return {
+        account: String(attempt.account_email || attempt.token || "账号"),
+        reason: String(attempt.reason || "验证失败"),
+        error: String(attempt.error || ""),
+      };
+    }),
+  };
+}
+
 function getDetailText(item: SystemLog, key: string) {
   const value = item.detail?.[key];
   return typeof value === "string" || typeof value === "number" ? String(value) : "-";
@@ -64,6 +97,7 @@ function LogsContent() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deletingItems, setDeletingItems] = useState<SystemLog[]>([]);
   const detailUrls = getUrls(detailLog);
+  const detailSelection = getAccountSelection(detailLog);
   const detailImages = detailUrls.map((url, index) => ({ id: `${index}`, src: url }));
   const isCallLog = type === LogType.Call;
   const pageSize = 10;
@@ -287,12 +321,34 @@ function LogsContent() {
                 {Object.entries(detailLog?.detail || {})
                   .filter(([key, value]) => key !== "urls" && typeof value !== "object")
                   .map(([key, value]) => (
-                    <div key={key} className="flex items-start justify-between gap-4">
-                      <span className="text-stone-400">{key}</span>
-                      <span className="text-right font-medium break-all text-stone-700">{String(value)}</span>
+                    <div key={key} className={`flex items-start justify-between gap-4 ${key === "error" ? "md:col-span-2" : ""}`}>
+                      <span className="shrink-0 text-stone-400">{detailLabels[key] || key}</span>
+                      <span className="text-right font-medium break-all text-stone-700">
+                        {key === "status" ? getStatus(detailLog!) : key === "duration_ms" ? formatDuration(detailLog!) :
+                          key === "error_code" ? (errorCodeLabels[String(value)] || String(value)) : String(value)}
+                      </span>
                     </div>
                   ))}
               </div>
+              {detailSelection ? (
+                <div className="space-y-3 rounded-xl border border-stone-200 bg-white p-4 text-sm">
+                  <div>
+                    <h3 className="font-medium text-stone-700">账号验证记录</h3>
+                    <p className="mt-1 text-xs text-stone-500">
+                      已检查 {detailSelection.attempted} 个账号，其中 {detailSelection.failed} 个验证失败。
+                    </p>
+                  </div>
+                  {detailSelection.errors.map((attempt, index) => (
+                    <div key={index} className="space-y-1 border-t border-stone-100 pt-3">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="break-all text-stone-600">{attempt.account}</span>
+                        <span className="font-medium text-amber-600 dark:text-amber-400">{attempt.reason}</span>
+                      </div>
+                      <p className="text-xs leading-5 break-all text-stone-500">{attempt.error}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {detailUrls.length ? (
                 <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
                   {detailUrls.map((url, index) => (

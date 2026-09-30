@@ -12,6 +12,7 @@ from typing import Any, Iterable, Iterator
 import tiktoken
 
 from services.account_service import account_service
+from services.account_selection_errors import AccountSelectionError
 from services.config import config
 from services.image_storage_service import image_storage_service
 from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
@@ -37,6 +38,7 @@ class ImageGenerationError(Exception):
         param: str | None = None,
         account_email: str = "",
         conversation_id: str = "",
+        account_selection: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -45,6 +47,7 @@ class ImageGenerationError(Exception):
         self.param = param
         self.account_email = account_email
         self.conversation_id = conversation_id
+        self.account_selection = account_selection
 
     def to_openai_error(self) -> dict[str, Any]:
         error_dict = {
@@ -1333,6 +1336,15 @@ def _generate_single_image(
                 reference_digests=reference_digests,
                 excluded_tokens=excluded_upload_tokens,
             )
+        except AccountSelectionError as exc:
+            if upload_error is not None and exc.code == "insufficient_quota":
+                raise ImageGenerationError(f"{upload_error}；没有其他满足额度条件的账号可重试", status_code=429,
+                                           error_type="rate_limit_error", code="file_upload_limit",
+                                           account_email=account_email) from exc
+            raise ImageGenerationError(
+                str(exc), status_code=exc.status_code, error_type=exc.error_type, code=exc.code,
+                account_email=exc.account_email or account_email, account_selection=exc.account_selection,
+            ) from exc
         except RuntimeError as exc:
             if upload_error is not None:
                 raise ImageGenerationError(f"{upload_error}；没有其他满足额度条件的账号可重试", status_code=429,
@@ -1641,6 +1653,13 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                 })
 
     if not emitted:
+        # Keep the structured error through n > 1, including HTTP status and admin diagnostics.
+        # A failed validation means quota could not be verified; it must not become a quota error.
+        structured_errors = [errors[index] for index in sorted(errors) if isinstance(errors[index], ImageGenerationError)]
+        selected_error = next((error for error in structured_errors if error.code == "account_validation_failed"),
+                              structured_errors[0] if structured_errors else None)
+        if selected_error is not None:
+            raise selected_error
         if not last_error:
             last_error = "no account in the pool could generate images — check account quota and rate-limit status"
         raise ImageGenerationError(image_stream_error_message(last_error), conversation_id="")

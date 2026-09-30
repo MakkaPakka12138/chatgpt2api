@@ -13,6 +13,9 @@ from typing import Any
 from urllib.parse import urlencode
 
 from services.config import config
+from services.account_selection_errors import (
+    AccountSelectionError, NoAvailableImageAccountError, validation_diagnostic, validation_selection_error,
+)
 from services.log_service import (
     LOG_TYPE_ACCOUNT,
     log_service,
@@ -20,6 +23,7 @@ from services.log_service import (
 from services.storage.base import StorageBackend
 from services.reference_uploads import UploadLimitError, reference_upload_cache, timestamp, upload_remaining
 from utils.helper import anonymize_token
+from utils.log import logger
 
 
 class AccountService:
@@ -1098,10 +1102,8 @@ class AccountService:
         with self._image_slot_condition:
             while True:
                 if not self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests):
-                    raise RuntimeError(
-                        "no account with available image and reference-upload quota" if reference_digests else
-                        f"no available {plan_type or source_type or ''} image quota".replace("  ", " ").strip()
-                        if plan_type or source_type else "no available image quota"
+                    raise NoAvailableImageAccountError(
+                        references=bool(reference_digests), account_filter=plan_type or source_type or "",
                     )
                 tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types, reference_digests)
                 if tokens:
@@ -1149,19 +1151,44 @@ class AccountService:
         """
         max_attempts = 20  # 防止无限循环
         attempted_tokens: set[str] = {self.resolve_access_token(token) for token in (excluded_tokens or ())}
+        validation_errors: list[dict[str, Any]] = []
+        attempts = 0
         for _attempt in range(max_attempts):
-            access_token = self._acquire_next_candidate_token(
-                excluded_tokens=attempted_tokens,
-                plan_type=plan_type,
-                source_type=source_type,
-                plan_types=plan_types,
-                reference_digests=reference_digests,
-            )
+            try:
+                access_token = self._acquire_next_candidate_token(
+                    excluded_tokens=attempted_tokens,
+                    plan_type=plan_type,
+                    source_type=source_type,
+                    plan_types=plan_types,
+                    reference_digests=reference_digests,
+                )
+            except NoAvailableImageAccountError as exc:
+                if validation_errors:
+                    raise validation_selection_error(attempts, validation_errors) from exc
+                raise
             attempted_tokens.add(access_token)
+            attempts += 1
+            before = self.get_account(access_token) or {}
+            started = time.monotonic()
             try:
                 account = self.fetch_remote_info(access_token, "get_available_access_token")
-            except Exception:
+            except Exception as exc:
                 self.release_image_slot(access_token)
+                attempted_tokens.add(self.resolve_access_token(access_token))
+                diagnostic = {
+                    "attempt": attempts,
+                    "token": anonymize_token(access_token),
+                    "account_email": str(before.get("email") or ""),
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                    **validation_diagnostic(exc, access_token),
+                }
+                validation_errors.append(diagnostic)
+                logger.warning({"event": "image_account_validation_failed", **diagnostic})
+                try:
+                    log_service.add(LOG_TYPE_ACCOUNT, "生图前账号验证失败",
+                                    {"source": "get_available_access_token", **diagnostic})
+                except Exception:
+                    logger.warning({"event": "image_account_validation_log_write_failed"})
                 continue
             # fetch_remote_info 内部可能因 token rotation 导致 access_token 变化，
             # 把新 token 也加入排除列表，防止重复尝试
@@ -1177,9 +1204,22 @@ class AccountService:
             ):
                 return str((account or {}).get("access_token") or access_token)
             self.release_image_slot(access_token)
-        raise RuntimeError(
-            f"no available {plan_type or source_type or ''} image quota (tried {len(attempted_tokens)} tokens)".replace("  ", " ").strip()
-            if plan_type or source_type else f"no available image quota (tried {len(attempted_tokens)} tokens)"
+        if validation_errors:
+            raise validation_selection_error(attempts, validation_errors)
+        with self._lock:
+            remaining_candidates = self._list_ready_candidate_tokens(
+                attempted_tokens, plan_type, source_type, plan_types, reference_digests,
+            )
+        if not remaining_candidates:
+            raise NoAvailableImageAccountError(
+                references=bool(reference_digests), account_filter=plan_type or source_type or "",
+            )
+        # The safety bound can be reached while untried candidates still exist.
+        # This does not prove that the whole pool is out of quota.
+        raise AccountSelectionError(
+            f"已检查 {attempts} 个账号，仍未找到符合条件的生图账号，已达到本次检查上限。请稍后重试。",
+            status_code=503, code="account_selection_exhausted",
+            account_selection={"attempted_accounts": attempts, "validation_failed": 0, "errors": []},
         )
 
     def get_text_access_token(
