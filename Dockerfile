@@ -22,7 +22,9 @@ ARG TARGETARCH
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    TIKTOKEN_BUNDLE_DIR=/opt/chatgpt2api/tiktoken-cache \
+    TIKTOKEN_CACHE_DIR=/app/data/tiktoken-cache
 
 WORKDIR /app
 
@@ -41,6 +43,9 @@ RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
+
+COPY scripts/prepare_tokenizers.py /tmp/prepare_tokenizers.py
+RUN .venv/bin/python /tmp/prepare_tokenizers.py /opt/chatgpt2api/tiktoken-cache
 
 COPY main.py ./
 COPY config.json ./

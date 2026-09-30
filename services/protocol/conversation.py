@@ -9,8 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator
 
-import tiktoken
-
 from services.account_service import account_service
 from services.account_selection_errors import AccountSelectionError
 from services.config import config
@@ -27,6 +25,7 @@ from utils.helper import (
 )
 from utils.image_tokens import count_image_content_tokens
 from utils.log import logger
+from utils.tokenizer import encoding_for_model
 
 
 class ImageGenerationError(Exception):
@@ -226,16 +225,6 @@ def build_image_prompt(prompt: str, size: str | None, quality: str = "auto") -> 
     if quality:
         hints.append(f"输出图片质量为 {quality}。")
     return f"{prompt.strip()}\n\n{''.join(hints)}" if hints else prompt
-
-
-def encoding_for_model(model: str):
-    try:
-        return tiktoken.encoding_for_model(model)
-    except KeyError:
-        try:
-            return tiktoken.get_encoding("o200k_base")
-        except KeyError:
-            return tiktoken.get_encoding("cl100k_base")
 
 
 def count_message_image_tokens(messages: list[dict[str, Any]], model: str) -> int:

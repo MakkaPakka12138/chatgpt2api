@@ -9,12 +9,11 @@ from services.protocol.conversation import (
     ConversationRequest,
     ImageGenerationError,
     collect_image_outputs,
-    count_text_tokens,
     encode_images,
     stream_image_chunks,
     stream_image_outputs_with_pool,
 )
-from utils.image_tokens import count_image_inputs_tokens, count_image_output_items_tokens, image_usage
+from services.protocol.image_usage import safe_image_usage
 
 
 def _composite_mask(
@@ -78,9 +77,5 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     if body.get("stream"):
         return stream_image_chunks(outputs)
     result = collect_image_outputs(outputs)
-    result["usage"] = image_usage(
-        input_text_tokens=count_text_tokens(prompt, model),
-        input_image_tokens=count_image_inputs_tokens(images, model),
-        output_tokens=count_image_output_items_tokens(result.get("data"), size, quality),
-    )
+    result["usage"] = safe_image_usage(prompt, model, result.get("data"), size, quality, images)
     return result

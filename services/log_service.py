@@ -336,6 +336,9 @@ class LoggedCall:
             detail["request_shape"] = self.request_shape
         if error:
             detail["error"] = error
+        if isinstance(result, dict) and isinstance(result.get("usage"), dict) and result["usage"].get("estimated"):
+            detail["usage_estimated"] = True
+            detail["usage_estimated_fields"] = result["usage"].get("estimated_fields", [])
         email = str(account_email or "").strip()
         if not email:
             emails = _collect_account_emails(result)

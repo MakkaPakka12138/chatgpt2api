@@ -15,6 +15,7 @@ from services.config import config
 from services.image_service import start_image_cleanup_scheduler
 from services.pool_status_service import pool_status_cache
 from services.reference_conversation_cleanup import reference_conversation_cleanup
+from utils.tokenizer import prepare_tokenizers
 
 
 def create_app() -> FastAPI:
@@ -22,6 +23,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        prepare_tokenizers()
         stop_event = Event()
         thread = start_limited_account_watcher(stop_event)
         cleanup_thread = start_image_cleanup_scheduler(stop_event)
