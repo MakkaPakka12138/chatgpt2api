@@ -26,6 +26,7 @@ from services.proxy_service import proxy_settings
 from services.reference_uploads import extract_upload_limits, reference_upload_cache, upload_limit_error
 from utils.helper import UpstreamHTTPError, ensure_ok, iter_sse_payloads, new_uuid, split_image_model
 from utils.log import logger
+from utils.upstream_diagnostics import record_request
 from utils.pow import build_legacy_requirements_token, build_proof_token, parse_pow_resources
 from utils.turnstile import solve_turnstile_token
 
@@ -2598,19 +2599,26 @@ class OpenAIBackendAPI:
             return
 
         normalized = messages or [{"role": "user", "content": prompt}]
+        self.text_conversation_accepted = False
         self._bootstrap()
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
         payload = self._conversation_payload(normalized, model, timezone, thinking_effort=thinking_effort)
-        response = self.session.post(
-            self.base_url + path,
+        response = record_request(
+            self, "post", self.base_url + path, "conversation_submit",
             headers=self._conversation_headers(path, requirements),
             json=payload,
             timeout=300,
             stream=True,
         )
-        ensure_ok(response, path)
         try:
+            ensure_ok(response, path)
+            # A successful response means the upstream accepted this conversation.
+            # Do not resubmit it even if the stream fails before the first delta.
+            self.text_conversation_accepted = True
+            attempt = getattr(self, "diagnostic_attempt", None)
+            if isinstance(attempt, dict):
+                attempt["stage"] = "conversation_stream"
             yield from iter_sse_payloads(response)
         finally:
             response.close()
@@ -2679,8 +2687,8 @@ class OpenAIBackendAPI:
 
     def _bootstrap(self) -> None:
         """预热首页，并提取 PoW 相关脚本引用。"""
-        response = self.session.get(
-            self.base_url + "/",
+        response = record_request(
+            self, "get", self.base_url + "/", "bootstrap",
             headers=self._bootstrap_headers(),
             timeout=30,
         )
@@ -2695,8 +2703,8 @@ class OpenAIBackendAPI:
         p_token = build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build)
 
         prepare_path = base + "/prepare"
-        response = self.session.post(
-            self.base_url + prepare_path,
+        response = record_request(
+            self, "post", self.base_url + prepare_path, "requirements_prepare",
             headers=self._headers(prepare_path, {"Content-Type": "application/json"}),
             json={"p": p_token},
             timeout=30,
@@ -2724,8 +2732,8 @@ class OpenAIBackendAPI:
             turnstile_token = solve_turnstile_token(turnstile_info["dx"], p_token) or ""
 
         finalize_path = base + "/finalize"
-        response = self.session.post(
-            self.base_url + finalize_path,
+        response = record_request(
+            self, "post", self.base_url + finalize_path, "requirements_finalize",
             headers=self._headers(finalize_path, {"Content-Type": "application/json"}),
             json={
                 "prepare_token": prepare_data.get("prepare_token", ""),

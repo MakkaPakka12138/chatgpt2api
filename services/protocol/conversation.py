@@ -7,13 +7,17 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator
+
+from curl_cffi import __version__ as curl_cffi_version
 
 from services.account_service import account_service
 from services.account_selection_errors import AccountSelectionError
 from services.config import config
 from services.image_storage_service import image_storage_service
 from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
+from services.proxy_service import proxy_settings
 from services.reference_uploads import UploadLimitError, reference_upload_cache
 from services.reference_conversation_cleanup import reference_conversation_cleanup
 from utils.helper import (
@@ -26,6 +30,7 @@ from utils.helper import (
 from utils.image_tokens import count_image_content_tokens
 from utils.log import logger
 from utils.tokenizer import encoding_for_model
+from utils.upstream_diagnostics import UpstreamTrace, current_trace, curl_error_code, error_category, redact_diagnostic, safe_endpoint
 
 
 class ImageGenerationError(Exception):
@@ -708,14 +713,39 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
     attempted_tokens: set[str] = set()
     token = getattr(backend, "access_token", "")
     emitted = False
+    trace = current_trace() or UpstreamTrace()
+    network_retry_used = False
+    retry_delay = 0.0
+    # The protocol creates its own active client. Close the unused initial client.
+    if callable(getattr(backend, "close", None)):
+        backend.close()
     while True:
-        if token and token in attempted_tokens:
-            raise RuntimeError("no available text account")
+        if retry_delay:
+            time.sleep(retry_delay)
+            retry_delay = 0.0
         if token:
             attempted_tokens.add(token)
+        attempt = trace.start_attempt(token)
+        started = time.monotonic()
         active_backend = None
         try:
             active_backend = OpenAIBackendAPI(access_token=token)
+            active_backend.diagnostic_attempt = attempt
+            account = getattr(active_backend, "account", {})
+            account = account if isinstance(account, dict) else {}
+            fingerprint = getattr(active_backend, "fp", {})
+            fingerprint = fingerprint if isinstance(fingerprint, dict) else {}
+            profile = proxy_settings.get_profile(account=account)
+            attempt.update(
+                account_email=str(account.get("email") or ""),
+                proxy=safe_endpoint(profile.proxy_url) if profile.proxy_url else "direct",
+                proxy_source=profile.proxy_source,
+                proxy_pool_id=profile.pool_id,
+                curl_cffi_version=curl_cffi_version,
+                tls_verify=not (profile.runtime_enabled and profile.skip_ssl_verify),
+                impersonate=fingerprint.get("impersonate", "chrome110"),
+                stage="client_setup",
+            )
             for event in conversation_events(
                 active_backend,
                 messages=request.messages,
@@ -723,17 +753,43 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                 prompt=request.prompt,
                 thinking_effort=request.thinking_effort,
             ):
+                if event.get("conversation_id"):
+                    attempt["conversation_id"] = str(event["conversation_id"])
                 if event.get("type") != "conversation.delta":
                     continue
                 delta = str(event.get("delta") or "")
                 if delta:
+                    if not emitted:
+                        attempt["first_delta_ms"] = round((time.monotonic() - started) * 1000)
                     emitted = True
                     yield delta
             account_service.mark_text_used(token)
+            attempt["status"] = "success"
             return
         except Exception as exc:
             error_message = str(exc)
-            if token and not emitted and is_token_invalid_error(error_message):
+            accepted = bool(getattr(active_backend, "text_conversation_accepted", False))
+            attempt.update(
+                status="failed", error_category=error_category(exc), curl_code=curl_error_code(exc),
+                error_type=type(exc).__name__, error=redact_diagnostic(exc, (token,)),
+                reply_started=emitted, conversation_accepted=accepted,
+            )
+            # Only pre-connection errors have a known-safe submission outcome.
+            # Read timeouts/resets and accepted conversations must not be replayed.
+            can_retry_connection = (
+                not emitted and not accepted and curl_error_code(exc) in (5, 6, 7, 35)
+                and not network_retry_used and len(trace.attempts) < 3
+            )
+            if can_retry_connection:
+                network_retry_used = True
+                attempt["retry_action"] = "reconnect"
+                attempt["retry_wait_ms"] = 1000
+                retry_delay = 1.0
+                continue
+            attempt["retry_action"] = (
+                "stop_reply_started" if emitted else "stop_upstream_accepted" if accepted else "stop"
+            )
+            if token and not emitted and not accepted and is_token_invalid_error(error_message) and len(trace.attempts) < 3:
                 refreshed_token = account_service.refresh_access_token(token, force=True, event="text_stream")
                 if refreshed_token and refreshed_token != token and refreshed_token not in attempted_tokens:
                     token = refreshed_token
@@ -743,12 +799,22 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                         excluded_tokens=set(attempted_tokens),
                         model=request.model,
                     )
-                if token:
+                if token and token not in attempted_tokens:
+                    attempt["retry_action"] = "refresh_or_switch_account"
                     continue
             raise
         finally:
+            attempt["duration_ms"] = round((time.monotonic() - started) * 1000)
+            attempt["ended_at"] = datetime.now(timezone.utc).isoformat()
             if active_backend is not None:
                 active_backend.close()
+            if attempt["status"] == "running":
+                attempt["status"] = "cancelled"
+            log_event = {"event": "text_upstream_attempt", "request_id": trace.request_id, **attempt}
+            if attempt["status"] == "failed":
+                logger.warning(log_event)
+            else:
+                logger.info(log_event)
 
 
 def collect_text(backend: OpenAIBackendAPI, request: ConversationRequest) -> str:

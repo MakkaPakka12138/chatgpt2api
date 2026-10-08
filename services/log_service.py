@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from utils.time_range import TimeRange
+from utils.upstream_diagnostics import UpstreamTrace, bind_trace, redact_diagnostic
 
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -212,8 +213,11 @@ def _protocol_error_response(exc: Exception, status_code: int, sse: str) -> JSON
     return openai_error_response(message, status_code)
 
 
-def _next_item(items):
+def _next_item(items, trace: UpstreamTrace | None = None):
     try:
+        if trace is not None:
+            with bind_trace(trace):
+                return True, next(items)
         return True, next(items)
     except StopIteration:
         return False, None
@@ -242,12 +246,17 @@ class LoggedCall:
     started: float = field(default_factory=time.time)
     request_text: str = ""
     request_shape: dict[str, int] | None = None
+    trace: UpstreamTrace = field(default_factory=UpstreamTrace, repr=False)
+
+    def _invoke(self, handler, *args):
+        with bind_trace(self.trace):
+            return handler(*args)
 
     async def run(self, handler, *args, sse: str = "openai"):
         from services.protocol.conversation import ImageGenerationError
 
         try:
-            result = await run_in_threadpool(handler, *args)
+            result = await run_in_threadpool(self._invoke, handler, *args)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
                      conversation_id=getattr(exc, "conversation_id", ""), exception=exc)
@@ -256,7 +265,7 @@ class LoggedCall:
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""), exception=exc)
             if self.endpoint.startswith("/v1/images"):
                 return _image_error_response(exc)
             return _protocol_error_response(exc, 502, sse)
@@ -269,7 +278,7 @@ class LoggedCall:
 
         sender = anthropic_sse_stream if sse == "anthropic" else sse_json_stream
         try:
-            has_first, first = await run_in_threadpool(_next_item, result)
+            has_first, first = await run_in_threadpool(_next_item, result, self.trace)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
                      conversation_id=getattr(exc, "conversation_id", ""), exception=exc)
@@ -278,7 +287,7 @@ class LoggedCall:
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""), exception=exc)
             if self.endpoint.startswith("/v1/images"):
                 return _image_error_response(exc)
             return _protocol_error_response(exc, 502, sse)
@@ -293,7 +302,11 @@ class LoggedCall:
         conversation_ids: list[str] = []
         failed = False
         try:
-            for item in items:
+            iterator = iter(items)
+            while True:
+                has_item, item = _next_item(iterator, self.trace)
+                if not has_item:
+                    break
                 urls.extend(_collect_urls(item))
                 account_emails.extend(_collect_account_emails(item))
                 conversation_ids.extend(_collect_conversation_ids(item))
@@ -332,6 +345,7 @@ class LoggedCall:
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": int((time.time() - self.started) * 1000),
             "status": status,
+            **self.trace.fields(),
             **exception_log_fields(exception),
         }
         request_excerpt = _request_excerpt(self.request_text)
@@ -340,7 +354,7 @@ class LoggedCall:
         if self.request_shape:
             detail["request_shape"] = self.request_shape
         if error:
-            detail["error"] = error
+            detail["error"] = redact_diagnostic(error, limit=2000)
         if isinstance(result, dict) and isinstance(result.get("usage"), dict) and result["usage"].get("estimated"):
             detail["usage_estimated"] = True
             detail["usage_estimated_fields"] = result["usage"].get("estimated_fields", [])

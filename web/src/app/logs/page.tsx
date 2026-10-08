@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { deleteSystemLogs, fetchSystemLogs, type SystemLog } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { browserTimeDetails, formatBrowserDateTime } from "@/lib/date-time";
+import { NetworkTrace } from "./network-trace";
 
 const LogType = {
   Call: "call",
@@ -33,6 +34,7 @@ const detailLabels: Record<string, string> = {
   error_code: "错误类型", http_status: "返回状态", account_email: "账号",
   duration_ms: "耗时", started_at: "开始时间", ended_at: "结束时间",
   key_name: "密钥名称", request_text: "请求内容",
+  request_id: "请求追踪编号",
 };
 
 const errorCodeLabels: Record<string, string> = {
@@ -333,6 +335,7 @@ function LogsContent() {
                     </div>
                   ))}
               </div>
+              <NetworkTrace value={detailLog?.detail?.network_trace} />
               {detailSelection ? (
                 <div className="space-y-3 rounded-xl border border-stone-200 bg-white p-4 text-sm">
                   <div>
