@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { httpRequest } from "@/lib/request";
 import { cn } from "@/lib/utils";
+import { formatBrowserDateTime } from "@/lib/date-time";
 import {
   listDeletedEditableFileIds,
   listEditableFileDrafts,
@@ -321,7 +322,7 @@ export function EditableFilePanel({ title, kind, endpoint, defaultPrompt, imageR
                     <div className="mt-2 flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
                       <Clock3 className="size-3.5" />
                       <span className="tabular-nums">{formatElapsed(elapsedOf(task))}</span>
-                      <span className="truncate">{task.created_at || id}</span>
+                      <span className="truncate">{task.created_at ? formatBrowserDateTime(task.created_at) : id}</span>
                     </div>
                     {(task.prompt_preview || drafts[id]?.prompt) ? <div className="mt-2 line-clamp-2 text-xs leading-5 text-stone-500 dark:text-stone-400">{task.prompt_preview || drafts[id]?.prompt}</div> : null}
                   </button>

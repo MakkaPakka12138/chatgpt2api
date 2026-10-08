@@ -1,3 +1,5 @@
+import { browserTimeDetails } from "@/lib/date-time";
+
 export type SearchResult = {
   conversation_id: string;
   status: string;
@@ -36,4 +38,4 @@ export type EditableFileTask = {
   };
 };
 
-export const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+export const pretty = (value: unknown) => JSON.stringify(browserTimeDetails(value), null, 2);

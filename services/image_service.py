@@ -148,7 +148,9 @@ def cleanup_image_thumbnails() -> int:
     _cleanup_empty_dirs(thumbnails_root)
     return removed
 
-def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict[str, object]:
+def list_images(base_url: str, start_date: str = "", end_date: str = "", start_at: str = "", end_before: str = "") -> dict[str, object]:
+    from utils.time_range import TimeRange
+    time_range = TimeRange(start_at, end_before)
     config.cleanup_old_images()
     cleanup_image_thumbnails()
     all_tags = load_tags()
@@ -160,6 +162,7 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict
             "tags": all_tags.get(str(item["path"]), []),
         }
         for item in image_storage_service.list_items(base_url, start_date, end_date)
+        if time_range.contains(str(item.get("created_at") or ""))
     ]
     groups: dict[str, list[dict[str, object]]] = {}
     for item in items:
@@ -167,11 +170,15 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict
     return {"items": items, "groups": [{"date": key, "items": value} for key, value in groups.items()]}
 
 
-def delete_images(paths: list[str] | None = None, start_date: str = "", end_date: str = "", all_matching: bool = False) -> dict[str, int]:
+def delete_images(paths: list[str] | None = None, start_date: str = "", end_date: str = "", all_matching: bool = False,
+                  start_at: str = "", end_before: str = "") -> dict[str, int]:
+    from utils.time_range import TimeRange
+    time_range = TimeRange(start_at, end_before)
     root = config.images_dir.resolve()
     targets = [
         str(item["path"])
         for item in image_storage_service.list_items("", start_date=start_date, end_date=end_date)
+        if time_range.contains(str(item.get("created_at") or ""))
     ] if all_matching else (paths or [])
     removed = 0
     for item in targets:

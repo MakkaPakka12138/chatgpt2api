@@ -1,4 +1,5 @@
 import { httpRequest, request } from "@/lib/request";
+import { browserDateBounds } from "@/lib/date-time";
 
 export type ProxyPoolNode = {
   id: string; name: string; address: string; enabled: boolean; status: string;
@@ -639,15 +640,15 @@ export function getBackupDownloadUrl(key: string) {
 
 export async function fetchManagedImages(filters: { start_date?: string; end_date?: string }) {
   const params = new URLSearchParams();
-  if (filters.start_date) params.set("start_date", filters.start_date);
-  if (filters.end_date) params.set("end_date", filters.end_date);
+  for (const [key, value] of Object.entries(browserDateBounds(filters.start_date, filters.end_date))) params.set(key, value);
   return httpRequest<{ items: ManagedImage[]; groups: Array<{ date: string; items: ManagedImage[] }> }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
   );
 }
 
 export async function deleteManagedImages(body: { paths?: string[]; start_date?: string; end_date?: string; all_matching?: boolean }) {
-  return httpRequest<{ removed: number }>("/api/images/delete", { method: "POST", body });
+  const { start_date, end_date, ...rest } = body;
+  return httpRequest<{ removed: number }>("/api/images/delete", { method: "POST", body: { ...rest, ...browserDateBounds(start_date, end_date) } });
 }
 
 export async function downloadImages(paths: string[]) {
@@ -716,8 +717,7 @@ export async function deleteToTarget(targetFreeMb: number) {
 export async function fetchSystemLogs(filters: { type?: string; start_date?: string; end_date?: string }) {
   const params = new URLSearchParams();
   if (filters.type) params.set("type", filters.type);
-  if (filters.start_date) params.set("start_date", filters.start_date);
-  if (filters.end_date) params.set("end_date", filters.end_date);
+  for (const [key, value] of Object.entries(browserDateBounds(filters.start_date, filters.end_date))) params.set(key, value);
   return httpRequest<{ items: SystemLog[] }>(`/api/logs${params.toString() ? `?${params.toString()}` : ""}`);
 }
 

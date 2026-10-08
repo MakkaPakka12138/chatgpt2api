@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatBrowserDateTime } from "@/lib/date-time";
 import {
   Eye,
   EyeOff,
@@ -497,7 +498,7 @@ export function Sub2APIConnections() {
                                     状态 {importJob.status}，已处理 {importJob.completed}/{importJob.total}
                                   </div>
                                   <div className="truncate text-xs text-stone-400">
-                                    任务 {importJob.job_id.slice(0, 8)} · {importJob.created_at}
+                                    任务 {importJob.job_id.slice(0, 8)} · {formatBrowserDateTime(importJob.created_at)}
                                   </div>
                                 </div>
                                 <Badge

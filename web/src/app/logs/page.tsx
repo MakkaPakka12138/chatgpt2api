@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { deleteSystemLogs, fetchSystemLogs, type SystemLog } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
+import { browserTimeDetails, formatBrowserDateTime } from "@/lib/date-time";
 
 const LogType = {
   Call: "call",
@@ -173,6 +174,7 @@ function LogsContent() {
         <div className="space-y-1">
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">Logs</div>
           <h1 className="text-2xl font-semibold tracking-tight">日志管理</h1>
+          <p className="text-xs text-stone-500">时间按浏览器时区显示，日期筛选按本地日期查询。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Select value={type} onValueChange={setType}>
@@ -245,7 +247,7 @@ function LogsContent() {
                       <TableCell>
                         <Checkbox checked={selectedSet.has(item.id)} onCheckedChange={(checked) => toggleIds([item.id], Boolean(checked))} />
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">{item.time}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatBrowserDateTime(item.time)}</TableCell>
                       <TableCell><Badge variant="secondary" className="rounded-md">{typeLabels[item.type] || item.type}</Badge></TableCell>
                       {isCallLog ? <TableCell>{getDetailText(item, "key_name")}</TableCell> : null}
                       {isCallLog ? <TableCell>{formatDuration(item)}</TableCell> : null}
@@ -325,7 +327,8 @@ function LogsContent() {
                       <span className="shrink-0 text-stone-400">{detailLabels[key] || key}</span>
                       <span className="text-right font-medium break-all text-stone-700">
                         {key === "status" ? getStatus(detailLog!) : key === "duration_ms" ? formatDuration(detailLog!) :
-                          key === "error_code" ? (errorCodeLabels[String(value)] || String(value)) : String(value)}
+                          key === "error_code" ? (errorCodeLabels[String(value)] || String(value)) :
+                          /(?:_at|_time)$/.test(key) && typeof value === "string" ? formatBrowserDateTime(value) : String(value)}
                       </span>
                     </div>
                   ))}
@@ -367,7 +370,7 @@ function LogsContent() {
                 </div>
               ) : null}
               <pre className="max-h-[72vh] overflow-auto rounded-xl border border-stone-200 bg-stone-50 p-4 text-xs leading-6 text-stone-700">
-                {JSON.stringify(detailLog?.detail || {}, null, 2)}
+                {JSON.stringify(browserTimeDetails(detailLog?.detail || {}), null, 2)}
               </pre>
             </div>
           </div>

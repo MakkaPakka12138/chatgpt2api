@@ -4,11 +4,12 @@ import json
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from services.config import DATA_DIR, config
+from utils.time_range import utc_datetime
 from services.content_filter import request_text
 from services.log_service import LOG_TYPE_CALL, exception_log_fields, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
@@ -22,19 +23,14 @@ UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
 
 
 def _now_iso() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _timestamp(value: object) -> float:
     if not isinstance(value, str) or not value.strip():
         return 0.0
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(value[:26], fmt).timestamp()
-        except ValueError:
-            continue
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        return utc_datetime(value).timestamp()
     except Exception:
         return 0.0
 
@@ -330,7 +326,7 @@ class ImageTaskService:
             "role": identity.get("role"),
             "endpoint": endpoint,
             "model": model,
-            "started_at": datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M:%S"),
+            "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat(),
             "ended_at": _now_iso(),
             "duration_ms": int((time.time() - started) * 1000),
             "status": status,

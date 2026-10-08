@@ -14,13 +14,14 @@ import webConfig from "@/constants/common-env";
 import { fetchBackupDetail, getBackupDownloadUrl, type BackupDetail, type BackupInclude } from "@/lib/api";
 import { getStoredAuthKey } from "@/store/auth";
 import { useSettingsStore } from "../store";
+import { parseServerDate } from "@/lib/date-time";
 
 function formatDateTime(value?: string | null) {
   if (!value) {
     return "—";
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseServerDate(value);
+  if (!date) {
     return value;
   }
   return new Intl.DateTimeFormat("zh-CN", {

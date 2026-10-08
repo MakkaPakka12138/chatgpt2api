@@ -21,6 +21,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
+import { parseServerDate } from "@/lib/date-time";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -111,8 +112,8 @@ function formatRestoreAt(value?: string | null) {
     return { absolute: "—", relative: "" };
   }
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseServerDate(value);
+  if (!date) {
     return { absolute: value, relative: "" };
   }
 
@@ -1156,8 +1157,8 @@ function AccountsPageContent() {
                             const raw = (account as any).created_at;
                             if (!raw) return "—";
                             try {
-                              const d = new Date(raw + "Z");
-                              if (isNaN(d.getTime())) return String(raw).slice(0, 10);
+                              const d = parseServerDate(raw);
+                              if (!d) return String(raw).slice(0, 10);
                               return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
                             } catch { return String(raw).slice(0, 10); }
                           })()}
@@ -1171,8 +1172,8 @@ function AccountsPageContent() {
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {
                             if (account.source_type === "codex") return "不适用";
-                            const blockedUntil = account.upload_blocked_until ? new Date(account.upload_blocked_until).getTime() : 0;
-                            const resetAt = account.upload_reset_at ? new Date(account.upload_reset_at).getTime() : 0;
+                            const blockedUntil = parseServerDate(account.upload_blocked_until)?.getTime() ?? 0;
+                            const resetAt = parseServerDate(account.upload_reset_at)?.getTime() ?? 0;
                             const blocked = blockedUntil > Date.now();
                             const expired = resetAt > 0 && resetAt <= Date.now();
                             const remaining = expired ? null : account.upload_remaining;
@@ -1182,7 +1183,7 @@ function AccountsPageContent() {
                                 <div className={blocked || (remaining != null && remaining < 20) ? "font-medium text-amber-600" : "font-medium text-stone-700"}>
                                   {blocked ? "受限" : remaining == null ? "未知" : `${remaining} 次${remaining < 20 ? " · 低" : ""}`}
                                 </div>
-                                {restoreAt && new Date(restoreAt).getTime() > Date.now() ? (
+                                {restoreAt && (parseServerDate(restoreAt)?.getTime() ?? 0) > Date.now() ? (
                                   <div>{formatRestoreAt(restoreAt).relative}</div>
                                 ) : expired ? <div>待刷新</div> : null}
                               </div>

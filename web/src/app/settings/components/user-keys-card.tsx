@@ -17,13 +17,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { createUserKey, deleteUserKey, fetchUserKeys, updateUserKey, type UserKey } from "@/lib/api";
+import { parseServerDate } from "@/lib/date-time";
 
 function formatDateTime(value?: string | null) {
   if (!value) {
     return "—";
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseServerDate(value);
+  if (!date) {
     return value;
   }
   return new Intl.DateTimeFormat("zh-CN", {

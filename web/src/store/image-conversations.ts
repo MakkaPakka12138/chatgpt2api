@@ -1,6 +1,7 @@
 "use client";
 
 import localforage from "localforage";
+import { parseServerDate } from "@/lib/date-time";
 
 import type { ImageModel } from "@/lib/api";
 
@@ -208,7 +209,7 @@ function sortImageConversations(conversations: ImageConversation[]): ImageConver
 }
 
 function getTimestamp(value: string) {
-  const time = new Date(value).getTime();
+  const time = parseServerDate(value)?.getTime() ?? NaN;
   return Number.isFinite(time) ? time : 0;
 }
 

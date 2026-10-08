@@ -13,11 +13,10 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { deleteAbnormalAccount, fetchAbnormalAccounts, recoverAbnormalAccount, type AbnormalAccount } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
+import { formatBrowserDateTime } from "@/lib/date-time";
 
 function formatDate(value?: string | null) {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+  return formatBrowserDateTime(value);
 }
 
 function tokenLabel(token: string) {

@@ -5,10 +5,11 @@ import json
 import itertools
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from utils.time_range import TimeRange
 
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -63,7 +64,7 @@ class LogService:
     def add(self, type: str, summary: str = "", detail: dict[str, Any] | None = None, **data: Any) -> None:
         item = {
             "id": uuid4().hex,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "time": datetime.now(timezone.utc).isoformat(),
             "type": type,
             "summary": summary,
             "detail": detail or data,
@@ -71,7 +72,9 @@ class LogService:
         with self.path.open("a", encoding="utf-8") as file:
             file.write(self._serialize_item(item) + "\n")
 
-    def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200,
+             start_at: str = "", end_before: str = "") -> list[dict[str, Any]]:
+        time_range = TimeRange(start_at, end_before)
         if not self.path.exists():
             return []
         items: list[dict[str, Any]] = []
@@ -81,6 +84,8 @@ class LogService:
             if item is None:
                 continue
             if not self._matches_filters(item, type=type, start_date=start_date, end_date=end_date):
+                continue
+            if not time_range.contains(str(item.get("time") or "")):
                 continue
             items.append(item)
             if len(items) >= limit:
@@ -323,8 +328,8 @@ class LoggedCall:
             "role": self.identity.get("role"),
             "endpoint": self.endpoint,
             "model": self.model,
-            "started_at": datetime.fromtimestamp(self.started).strftime("%Y-%m-%d %H:%M:%S"),
-            "ended_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "started_at": datetime.fromtimestamp(self.started, timezone.utc).isoformat(),
+            "ended_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": int((time.time() - self.started) * 1000),
             "status": status,
             **exception_log_fields(exception),

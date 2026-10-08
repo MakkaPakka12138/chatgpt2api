@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, History, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { parseServerDate } from "@/lib/date-time";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
@@ -103,8 +104,8 @@ function buildConversationTitle(prompt: string) {
 }
 
 function formatConversationTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseServerDate(value);
+  if (!date) {
     return "";
   }
   return new Intl.DateTimeFormat("zh-CN", {
